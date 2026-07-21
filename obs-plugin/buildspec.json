@@ -1,0 +1,10 @@
+{
+  "name": "obs-overlay-time-show",
+  "displayName": "OBS Overlay Time Show",
+  "version": "1.0.0",
+  "author": "OBS-OverlayTimeShow",
+  "website": "",
+  "description": "Timer de gravacao na tela, excluido da captura (estilo Action!).",
+  "platform": "windows",
+  "uuid": "a4f8c2e1-7b3d-4f9a-9c1e-2d8e6f0a1b3c"
+}

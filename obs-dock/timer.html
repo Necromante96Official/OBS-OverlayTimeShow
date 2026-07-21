@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Timer de Gravacao</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #1a1a1a;
+      --fg: #ffffff;
+      --accent: #ff2d2d;
+      --paused: #ffd166;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+    }
+
+    .panel {
+      text-align: center;
+      padding: 16px;
+    }
+
+    .rec-dot {
+      color: var(--accent);
+      font-size: 28px;
+      line-height: 1;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    .rec-dot.active {
+      opacity: 1;
+    }
+
+    .time {
+      font-size: 42px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      margin-top: 8px;
+    }
+
+    .status {
+      min-height: 1.4em;
+      margin-top: 6px;
+      color: var(--paused);
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    .hint {
+      margin-top: 18px;
+      font-size: 12px;
+      opacity: 0.65;
+      max-width: 260px;
+    }
+
+    .error {
+      color: #ff6b6b;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="panel">
+    <div id="dot" class="rec-dot">●</div>
+    <div id="time" class="time">00:00</div>
+    <div id="status" class="status"></div>
+    <div id="hint" class="hint">Conectando ao OBS WebSocket...</div>
+  </div>
+
+  <script>
+    const WS_HOST = "127.0.0.1";
+    const WS_PORT = 4455;
+    const WS_PASSWORD = "";
+
+    const dot = document.getElementById("dot");
+    const timeEl = document.getElementById("time");
+    const statusEl = document.getElementById("status");
+    const hintEl = document.getElementById("hint");
+
+    let socket = null;
+    let requestId = 1;
+    let recording = false;
+    let paused = false;
+    let elapsedMs = 0;
+    let segmentStart = performance.now();
+
+    function formatElapsed(ms) {
+      const total = Math.max(0, Math.floor(ms / 1000));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+      return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    }
+
+    function updateUi() {
+      const now = performance.now();
+      if (recording && !paused) {
+        elapsedMs += now - segmentStart;
+      }
+      segmentStart = now;
+
+      timeEl.textContent = formatElapsed(elapsedMs);
+      dot.classList.toggle("active", recording);
+      statusEl.textContent = paused ? "PAUSADO" : "";
+    }
+
+    function onRecordState(active, isPaused) {
+      if (active && !recording) {
+        recording = true;
+        paused = false;
+        elapsedMs = 0;
+        segmentStart = performance.now();
+      } else if (active && recording) {
+        if (isPaused && !paused) {
+          const now = performance.now();
+          elapsedMs += now - segmentStart;
+          paused = true;
+          segmentStart = now;
+        } else if (!isPaused && paused) {
+          paused = false;
+          segmentStart = performance.now();
+        }
+      } else if (!active) {
+        recording = false;
+        paused = false;
+        elapsedMs = 0;
+        segmentStart = performance.now();
+      }
+      updateUi();
+    }
+
+    function sendRequest(requestType, requestData = {}) {
+      const id = String(requestId++);
+      socket.send(JSON.stringify({ op: 6, d: { requestType, requestId: id, requestData } }));
+      return id;
+    }
+
+    function connect() {
+      socket = new WebSocket(`ws://${WS_HOST}:${WS_PORT}`);
+
+      socket.addEventListener("open", () => {
+        hintEl.textContent = "Autenticando...";
+        socket.send(JSON.stringify({
+          op: 1,
+          d: {
+            rpcVersion: 1,
+            authentication: WS_PASSWORD || undefined,
+            eventSubscriptions: 64
+          }
+        }));
+      });
+
+      socket.addEventListener("message", (event) => {
+        const payload = JSON.parse(event.data);
+        const { op, d } = payload;
+
+        if (op === 2) {
+          hintEl.textContent = "Dock interno do OBS — nao aparece na gravacao.";
+          sendRequest("GetRecordStatus");
+          setInterval(updateUi, 100);
+          return;
+        }
+
+        if (op === 5 && d.eventType === "RecordStateChanged") {
+          onRecordState(d.eventData.outputActive, d.eventData.outputPaused);
+          return;
+        }
+
+        if (op === 7 && d.requestType === "GetRecordStatus") {
+          const data = d.responseData || {};
+          onRecordState(data.outputActive, data.outputPaused);
+        }
+
+        if (op === 8) {
+          hintEl.innerHTML = `<span class="error">Erro OBS: ${d.error}</span>`;
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        hintEl.innerHTML = '<span class="error">Desconectado. Verifique o WebSocket do OBS.</span>';
+        setTimeout(connect, 3000);
+      });
+    }
+
+    connect();
+  </script>
+</body>
+
+</html>
