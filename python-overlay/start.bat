@@ -4,7 +4,8 @@ cd /d "%~dp0"
 
 where python >nul 2>&1
 if errorlevel 1 (
-  echo Python nao encontrado. Instale Python 3.10+ e tente novamente.
+  echo Python nao encontrado. Instale Python 3.10+ em https://www.python.org/
+  echo Marque a opcao "Add python.exe to PATH" na instalacao.
   pause
   exit /b 1
 )
@@ -19,4 +20,4 @@ if not exist ".venv\Scripts\python.exe" (
   call .venv\Scripts\activate.bat
 )
 
-python overlay\recording_timer.py
+python recording_timer.py

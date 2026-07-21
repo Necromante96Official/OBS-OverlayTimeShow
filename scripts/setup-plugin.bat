@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 set TEMPLATE_DIR=obs-plugintemplate-build
 set PLUGIN_NAME=obs-overlay-time-show
@@ -18,10 +18,10 @@ if not exist "%TEMPLATE_DIR%\.git" (
 )
 
 echo Copiando codigo do plugin...
-xcopy /E /I /Y "obs-plugin\src" "%TEMPLATE_DIR%\src" >nul
-xcopy /E /I /Y "obs-plugin\data" "%TEMPLATE_DIR%\data" >nul
-copy /Y "obs-plugin\buildspec.json" "%TEMPLATE_DIR%\buildspec.json" >nul
-copy /Y "obs-plugin\CMakeLists.txt" "%TEMPLATE_DIR%\CMakeLists.txt" >nul
+xcopy /E /I /Y "native-plugin\src" "%TEMPLATE_DIR%\src" >nul
+xcopy /E /I /Y "native-plugin\data" "%TEMPLATE_DIR%\data" >nul
+copy /Y "native-plugin\buildspec.json" "%TEMPLATE_DIR%\buildspec.json" >nul
+copy /Y "native-plugin\CMakeLists.txt" "%TEMPLATE_DIR%\CMakeLists.txt" >nul
 
 echo.
 echo Arquivos copiados para %TEMPLATE_DIR%
@@ -34,5 +34,5 @@ echo   4. cd %TEMPLATE_DIR%
 echo   5. cmake --preset windows-x64
 echo   6. cmake --build --preset windows-x64
 echo.
-echo Leia obs-plugin\PLUGIN-BUILD.md para detalhes completos.
+echo Leia docs\COMPILAR-PLUGIN.md para detalhes completos.
 pause

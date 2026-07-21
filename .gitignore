@@ -1,24 +1,26 @@
 # Python
 .venv/
+python-overlay/.venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
 
-# Local secrets / machine config (contains WebSocket password)
+# Local secrets (WebSocket password and personal settings)
 config.json
+**/config.json
+!**/config.example.json
 
-# OBS plugin build artifacts
+# Build / template artifacts
 obs-plugintemplate-build/
 .deps/
 build_x64/
 build/
+build-output/
+dist/
 **/RelWithDebInfo/
 **/Debug/
 **/Release/
-
-# Compiled plugin output (rebuild locally)
-dist/
 
 # IDE / OS
 .vs/
@@ -28,8 +30,10 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Temp logs from agent/scripts
+# Temp
+_*.txt
 build-status.txt
 build-log.txt
 git-out.txt
 *.log
+_reorg.py

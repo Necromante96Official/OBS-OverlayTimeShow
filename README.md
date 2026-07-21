@@ -1,145 +1,160 @@
 # OBS Overlay Time Show
 
-Timer de gravacao para OBS Studio, no estilo do indicador do **Action! (Mirillis)**: voce ve o tempo na tela enquanto grava, mas o overlay **nao entra no video gravado**.
+Timer de gravacao para o OBS Studio, no estilo do indicador do Action!.
 
-## O que este projeto faz
-
-- Inicia a contagem quando a gravacao comeca
-- Pausa ao pausar a gravacao no OBS
-- Retoma ao despausar
-- Para e zera ao encerrar a gravacao
-- Exibe um indicador visual (ponto vermelho + tempo)
-- **Nao aparece na gravacao** usando a API do Windows `SetWindowDisplayAffinity` (Windows 10 2004+ / Windows 11)
-
-## Requisitos
-
-- Windows 10 (2004 ou superior) ou Windows 11
-- [OBS Studio](https://obsproject.com/) 28+
-- Python 3.10+ (para o overlay na tela)
-- **OBS WebSocket** ativado:
-  1. OBS → **Ferramentas** → **WebSocket Server Settings**
-  2. Marque **Enable WebSocket server**
-  3. Anote a porta (padrao `4455`) e a senha, se houver
-
-## Instalacao rapida (overlay na tela)
-
-1. Clone ou baixe este repositorio
-2. Execute `start-overlay.bat`
-3. Na primeira execucao, sera criado `config.json` a partir de `config.example.json`
-4. Edite `config.json` e coloque a senha do WebSocket, se voce configurou uma
-5. Inicie uma gravacao no OBS — o overlay deve aparecer no canto da tela
-
-### Configuracao (`config.json`)
-
-| Campo | Descricao |
-|-------|-----------|
-| `host` | Endereco do OBS (padrao `127.0.0.1`) |
-| `port` | Porta WebSocket (padrao `4455`) |
-| `password` | Senha do WebSocket |
-| `position` | `top-right`, `top-left`, `top-center`, `bottom-right`, `bottom-left`, `bottom-center` |
-| `offset_x`, `offset_y` | Margem em pixels |
-| `font_family`, `font_size` | Fonte do timer |
-| `text_color`, `background_color` | Cores (hex) |
-| `show_rec_dot` | Mostrar ponto vermelho de gravacao |
-| `hide_when_not_recording` | Esconder overlay quando nao estiver gravando |
-
-## Plugin compilado e instalado
-
-O plugin nativo foi compilado e copiado para o OBS (Steam):
-
-```
-D:\SteamLibrary\steamapps\common\OBS Studio\obs-plugins\64bit\obs-overlay-time-show.dll
-```
-
-**Para usar:** feche e reabra o OBS, depois inicie uma gravacao.
-
-### Atalhos para mover o timer
-
-Configure em **OBS → Configuracoes → Atalhos** e pesquise por **`Timer OBS`**:
-
-| Atalho na lista | Acao |
-|-----------------|------|
-| Timer OBS: mover para cima | Move 24 px |
-| Timer OBS: mover para baixo | Move 24 px |
-| Timer OBS: mover para esquerda | Move 24 px |
-| Timer OBS: mover para direita | Move 24 px |
-
-> Se nao aparecer, feche o OBS e rode `install-plugin.bat` (a versao antiga do plugin nao tinha atalhos).
-
-A posicao e salva automaticamente entre sessoes.
-
-### Visual compacto
-
-- **Verde ●** = gravando
-- **Amarelo ⏸** = pausado
-- Apenas icone + tempo (sem texto "PAUSADO")
-
-Copia de backup do DLL: `dist/obs-overlay-time-show.dll`
-Reinstalar depois de atualizar: `install-plugin.bat`
-
-### Recompilar (se necessario)
-
-```bat
-cd obs-plugintemplate-build
-cmake --preset windows-x64
-cmake --build --preset windows-x64 --parallel
-install-plugin.bat
-```
+Voce ve o tempo na tela enquanto grava. O overlay **nao entra no video**.
 
 ---
 
-## Alternativa: plugin nativo do OBS (sem Python)
+## O que ele faz
 
-O codigo do plugin esta em `obs-plugin/`. Ele faz o mesmo que o overlay Python, mas roda **dentro do OBS** (sem WebSocket).
-
-**Vantagens:** um unico programa, inicia com o OBS, sem senha WebSocket.
-**Desvantagem:** precisa **compilar** o plugin (Visual Studio + CMake + fontes do OBS).
-
-Guia completo: [`obs-plugin/PLUGIN-BUILD.md`](obs-plugin/PLUGIN-BUILD.md)
-Script auxiliar: `setup-plugin.bat`
+- Comeca a contar quando a gravacao inicia
+- Pausa e retoma junto com o OBS
+- Para e some quando a gravacao termina
+- Pode ser movido com o mouse (plugin) ou por atalhos
+- Nao aparece na gravacao (Windows 10 2004+ / Windows 11)
 
 ---
 
-## Alternativa: dock interno do OBS (sem Python)
+## Qual modo usar?
 
-Se preferir o timer **dentro da interface do OBS** (nunca aparece na gravacao):
+| Modo | Para quem | Como comecar |
+|------|-----------|--------------|
+| **Overlay Python** (mais facil) | Qualquer pessoa | Duplo clique em `Iniciar-Overlay.bat` |
+| **Plugin nativo** | Quem quer tudo dentro do OBS | Compilar: veja `docs/COMPILAR-PLUGIN.md` |
+| **Dock no OBS** | Quem so quer ver o tempo no painel do OBS | Use `browser-dock/timer.html` |
+
+Para a maioria das pessoas, o **Overlay Python** e o caminho mais simples.
+
+---
+
+## Inicio rapido (recomendado)
+
+### 1. Requisitos
+
+- Windows 10 (atualizado) ou Windows 11
+- [OBS Studio](https://obsproject.com/) 28 ou superior
+- [Python 3.10+](https://www.python.org/downloads/)
+  Na instalacao, marque **Add python.exe to PATH**
+
+### 2. Ativar o WebSocket no OBS
+
+1. Abra o OBS
+2. Menu **Ferramentas** → **WebSocket Server Settings**
+3. Marque **Enable WebSocket server**
+4. Se houver senha, anote (ou deixe o programa pedir depois)
+
+### 3. Rodar o overlay
+
+1. Baixe ou clone este projeto
+2. De duplo clique em **`Iniciar-Overlay.bat`**
+3. Na primeira vez, ele cria um ambiente Python e instala o necessario
+4. Inicie uma **gravacao** no OBS
+5. O timer deve aparecer no canto da tela
+
+### 4. Senha do WebSocket (se pedir)
+
+Se o OBS tiver autenticacao ligada:
+
+1. OBS → **Ferramentas** → **WebSocket Server Settings** → **Show Connect Info**
+2. Copie a senha
+3. Cole quando o overlay pedir
+   ou edite `python-overlay/config.json` e preencha `"password"`
+
+> O arquivo `config.json` fica **so no seu computador**. Ele nao deve ser enviado para o GitHub.
+
+---
+
+## Configuracao basica (Python)
+
+Arquivo de exemplo: `python-overlay/config.example.json`
+Arquivo real (criado automaticamente): `python-overlay/config.json`
+
+Campos uteis:
+
+| Campo | Significado |
+|-------|-------------|
+| `password` | Senha do WebSocket (deixe vazio se nao usar) |
+| `position` | Posicao: `top-right`, `top-left`, `bottom-right`, etc. |
+| `offset_x` / `offset_y` | Distancia das bordas |
+| `hide_when_not_recording` | Esconde o timer quando nao esta gravando |
+
+---
+
+## Plugin nativo (opcional)
+
+O plugin fica em `native-plugin/` e roda dentro do OBS (sem Python e sem WebSocket).
+
+- Visual em formato “pill” (HUD)
+- Ponto verde pulsando ao gravar
+- Arrastar com o mouse
+- Atalhos para mover
+
+Guia completo: [`docs/COMPILAR-PLUGIN.md`](docs/COMPILAR-PLUGIN.md)
+
+Atalhos no OBS: **Configuracoes → Atalhos** → busque **Timer OBS**.
+
+---
+
+## Dock interno (opcional)
 
 1. Ative o WebSocket no OBS
-2. Abra `obs-dock/timer.html` e ajuste `WS_PASSWORD` se necessario
+2. Se precisar, edite a senha em `browser-dock/timer.html` (`WS_PASSWORD`)
 3. OBS → **Docks** → **Custom Browser Docks...**
 4. Nome: `Timer de Gravacao`
-5. URL: caminho completo do arquivo, por exemplo:
-   `file:///D:/OBS-OverlayTimeShow/obs-dock/timer.html`
-6. Marque o dock em **Docks** no menu **View**
+5. URL: caminho `file:///` ate `browser-dock/timer.html`
 
-Esse modo nao flutua sobre o jogo; fica no painel do OBS.
+Esse modo fica no painel do OBS (nao flutua sobre o jogo).
 
-## Por que funciona sem aparecer na gravacao?
+---
 
-O overlay na tela usa `WDA_EXCLUDEFROMCAPTURE`, a mesma ideia de overlays modernos no Windows: a janela fica visivel para voce, mas e ignorada por capturas de tela e pelo OBS ao gravar a area de trabalho.
+## Por que nao aparece na gravacao?
 
-**Importante:** isso funciona com **Captura de Tela/Display Capture** e gravacao normal do OBS. Se voce adicionar o timer como **fonte dentro da cena** (Browser Source, Texto, etc.), ele **vai** aparecer na gravacao.
+No Windows, o overlay usa uma funcao do sistema que **exclui a janela da captura**.
 
-## Solucao de problemas
+Isso vale para Captura de Tela / Display Capture.
+Se voce adicionar o timer como **fonte na cena** (Browser Source, Texto, etc.), ele **vai** aparecer no video.
 
-| Problema | O que verificar |
-|----------|-----------------|
-| Overlay nao conecta | OBS aberto, WebSocket ativo, senha correta em `config.json` |
-| Erro `authentication enabled but no password` | O script tenta ler a senha automaticamente do OBS. Se falhar, abra `config.json` e preencha `"password"` com a senha de **Ferramentas → WebSocket Server Settings → Show Connect Info** |
-| Overlay aparece na gravacao | Windows desatualizado; atualize para 10 2004+ ou use o dock interno |
-| Timer nao pausa | Use OBS 28+ com suporte a pausar gravacao |
-| Python nao encontrado | Instale em https://www.python.org/ e marque "Add to PATH" |
+---
 
-## Estrutura
+## Problemas comuns
+
+| Problema | O que fazer |
+|----------|-------------|
+| Overlay nao conecta | OBS aberto, WebSocket ligado, senha correta |
+| Pediu senha | Use Show Connect Info no OBS e preencha `config.json` |
+| Overlay aparece no video | Atualize o Windows; nao use o timer como fonte da cena |
+| Python nao encontrado | Reinstale o Python marcando Add to PATH |
+| Plugin nao aparece | Feche o OBS e rode `scripts\install-plugin.bat` |
+
+---
+
+## Estrutura do projeto
 
 ```
 OBS-OverlayTimeShow/
-  overlay/recording_timer.py   # Overlay na tela (principal)
-  obs-dock/timer.html          # Timer no dock do OBS (alternativa)
-  config.example.json
-  start-overlay.bat
-  requirements.txt
+├── Iniciar-Overlay.bat      ← comece por aqui
+├── README.md
+├── .gitignore
+├── python-overlay/          ← modo facil (Python)
+├── native-plugin/           ← codigo do plugin OBS
+├── browser-dock/            ← timer no painel do OBS
+├── scripts/                 ← instalar / compilar / limpar / GitHub
+└── docs/                    ← guias extras
 ```
+
+Arquivos antigos (`overlay/`, `obs-plugin/`, `obs-dock/`) nao devem ficar na raiz.
+Se ainda existirem apos atualizar, rode uma vez: `scripts\limpar-legado.bat`
+
+---
+
+## Privacidade
+
+- Nao compartilhe seu `config.json` (pode ter senha do WebSocket)
+- Nao compartilhe pastas `.venv/`, `build-output/` ou caminhos pessoais do seu PC
+- Este README usa apenas exemplos genericos
+
+---
 
 ## Licenca
 

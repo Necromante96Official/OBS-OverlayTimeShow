@@ -28,7 +28,7 @@ CONFIG_NAME = "config.json"
 
 
 def script_dir() -> Path:
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent
 
 
 def load_config() -> dict:

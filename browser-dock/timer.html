@@ -10,8 +10,8 @@
       color-scheme: dark;
       --bg: #1a1a1a;
       --fg: #ffffff;
-      --accent: #ff2d2d;
-      --paused: #ffd166;
+      --accent: #3dff8a;
+      --paused: #ffc857;
     }
 
     * {
@@ -50,6 +50,7 @@
       font-weight: 700;
       letter-spacing: 0.04em;
       margin-top: 8px;
+      font-family: "Cascadia Mono", Consolas, monospace;
     }
 
     .status {
@@ -80,8 +81,8 @@
     <div id="status" class="status"></div>
     <div id="hint" class="hint">Conectando ao OBS WebSocket...</div>
   </div>
-
   <script>
+    // Preencha a senha do WebSocket do OBS, se houver autenticacao.
     const WS_HOST = "127.0.0.1";
     const WS_PORT = 4455;
     const WS_PASSWORD = "";
@@ -113,7 +114,6 @@
         elapsedMs += now - segmentStart;
       }
       segmentStart = now;
-
       timeEl.textContent = formatElapsed(elapsedMs);
       dot.classList.toggle("active", recording);
       statusEl.textContent = paused ? "PAUSADO" : "";
@@ -152,7 +152,6 @@
 
     function connect() {
       socket = new WebSocket(`ws://${WS_HOST}:${WS_PORT}`);
-
       socket.addEventListener("open", () => {
         hintEl.textContent = "Autenticando...";
         socket.send(JSON.stringify({
@@ -164,39 +163,32 @@
           }
         }));
       });
-
       socket.addEventListener("message", (event) => {
         const payload = JSON.parse(event.data);
         const { op, d } = payload;
-
         if (op === 2) {
           hintEl.textContent = "Dock interno do OBS — nao aparece na gravacao.";
           sendRequest("GetRecordStatus");
           setInterval(updateUi, 100);
           return;
         }
-
         if (op === 5 && d.eventType === "RecordStateChanged") {
           onRecordState(d.eventData.outputActive, d.eventData.outputPaused);
           return;
         }
-
         if (op === 7 && d.requestType === "GetRecordStatus") {
           const data = d.responseData || {};
           onRecordState(data.outputActive, data.outputPaused);
         }
-
         if (op === 8) {
           hintEl.innerHTML = `<span class="error">Erro OBS: ${d.error}</span>`;
         }
       });
-
       socket.addEventListener("close", () => {
         hintEl.innerHTML = '<span class="error">Desconectado. Verifique o WebSocket do OBS.</span>';
         setTimeout(connect, 3000);
       });
     }
-
     connect();
   </script>
 </body>
