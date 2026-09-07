@@ -18,6 +18,7 @@ if not exist ".venv\Scripts\python.exe" (
   pip install -r requirements.txt
 ) else (
   call .venv\Scripts\activate.bat
+  pip install -q -r requirements.txt
 )
 
-python recording_timer.py
+python main.py

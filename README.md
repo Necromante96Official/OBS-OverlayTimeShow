@@ -8,91 +8,87 @@ Voce ve o tempo na tela enquanto grava. O overlay **nao entra no video**.
 
 ## O que ele faz
 
-- Comeca a contar quando a gravacao inicia
-- Pausa e retoma junto com o OBS
-- Para e some quando a gravacao termina
-- Pode ser movido com o mouse (plugin) ou por atalhos
-- Nao aparece na gravacao (Windows 10 2004+ / Windows 11)
+- Timer de gravacao na tela (nao entra no video)
+- Dock **Suites de Automacao**: perfis por jogo (so uma ativa)
+- Ao iniciar a gravacao, executa os passos da suite ativa
+- Ao terminar, pode abrir a pasta do arquivo gravado
+- Pode ser movido com o mouse ou por atalhos
+- Atalho para executar a suite ativa sem gravar
 
 ---
 
-## Qual modo usar?
+## Suites (painel no OBS)
 
-| Modo | Para quem | Como comecar |
-|------|-----------|--------------|
-| **Overlay Python** (mais facil) | Qualquer pessoa | Duplo clique em `Iniciar-Overlay.bat` |
-| **Plugin nativo** | Quem quer tudo dentro do OBS | Compilar: veja `docs/COMPILAR-PLUGIN.md` |
-| **Dock no OBS** | Quem so quer ver o tempo no painel do OBS | Use `browser-dock/timer.html` |
+1. No OBS: **Docks** / painel **Suites de Automacao**
+2. Crie uma suite (ex.: Necesse), clique **Ativar**
+3. Marque **Ao terminar, abrir pasta da gravacao** se quiser
+4. Adicione passos: cena, fonte, delay, transicao, mute, volume, condicoes, etc.
+5. Grave — a suite ativa roda sozinha
 
-Para a maioria das pessoas, o **Overlay Python** e o caminho mais simples.
+Atalho: **Configuracoes → Atalhos** → **Suites: executar suite ativa**
+
+Configs das suites ficam no AppData do plugin (`suites.json`), preservadas entre atualizacoes.
 
 ---
 
-## Inicio rapido (recomendado)
+## Inicio rapido (plugin nativo)
 
 ### 1. Requisitos
 
 - Windows 10 (atualizado) ou Windows 11
-- [OBS Studio](https://obsproject.com/) 28 ou superior
-- [Python 3.10+](https://www.python.org/downloads/)
-  Na instalacao, marque **Add python.exe to PATH**
+- OBS Studio (Steam): `D:\SteamLibrary\steamapps\common\OBS Studio`
 
-### 2. Ativar o WebSocket no OBS
+Na primeira vez, rode **`Setup-Build-Env.bat`**. Ele instala e coloca no PATH:
 
-1. Abra o OBS
-2. Menu **Ferramentas** → **WebSocket Server Settings**
-3. Marque **Enable WebSocket server**
-4. Se houver senha, anote (ou deixe o programa pedir depois)
+- CMake
+- Git (se faltar)
+- Visual Studio 2022 Build Tools (C++)
 
-### 3. Rodar o overlay
+Depois feche e reabra o terminal/Cursor para o PATH valer em todos os programas.
 
-1. Baixe ou clone este projeto
-2. De duplo clique em **`Iniciar-Overlay.bat`**
-3. Na primeira vez, ele cria um ambiente Python e instala o necessario
-4. Inicie uma **gravacao** no OBS
-5. O timer deve aparecer no canto da tela
+### 2. Compilar e instalar
 
-### 4. Senha do WebSocket (se pedir)
+1. Feche o OBS
+2. De duplo clique em **`Build-Install-Plugin.bat`**
+3. Espere a compilacao e a copia para a pasta do OBS
+4. Abra o OBS e inicie uma **gravacao**
 
-Se o OBS tiver autenticacao ligada:
+O script:
 
-1. OBS → **Ferramentas** → **WebSocket Server Settings** → **Show Connect Info**
-2. Copie a senha
-3. Cole quando o overlay pedir
-   ou edite `python-overlay/config.json` e preencha `"password"`
+- Compila o plugin
+- Remove a DLL/textos antigos do plugin
+- Instala a versao nova
+- **Nao apaga** posicao do timer, atalhos, cenas ou perfis do OBS
 
-> O arquivo `config.json` fica **so no seu computador**. Ele nao deve ser enviado para o GitHub.
+### 3. Destino da instalacao
 
----
+```
+D:\SteamLibrary\steamapps\common\OBS Studio\obs-plugins\64bit\obs-overlay-time-show.dll
+D:\SteamLibrary\steamapps\common\OBS Studio\data\obs-plugins\obs-overlay-time-show\
+```
 
-## Configuracao basica (Python)
-
-Arquivo de exemplo: `python-overlay/config.example.json`
-Arquivo real (criado automaticamente): `python-overlay/config.json`
-
-Campos uteis:
-
-| Campo | Significado |
-|-------|-------------|
-| `password` | Senha do WebSocket (deixe vazio se nao usar) |
-| `position` | Posicao: `top-right`, `top-left`, `bottom-right`, etc. |
-| `offset_x` / `offset_y` | Distancia das bordas |
-| `hide_when_not_recording` | Esconde o timer quando nao esta gravando |
-
----
-
-## Plugin nativo (opcional)
-
-O plugin fica em `native-plugin/` e roda dentro do OBS (sem Python e sem WebSocket).
-
-- Visual em formato “pill” (HUD)
-- Ponto verde pulsando ao gravar
-- Arrastar com o mouse
-- Atalhos para mover
-
-Guia completo: [`docs/COMPILAR-PLUGIN.md`](docs/COMPILAR-PLUGIN.md)
+Para outro caminho do OBS, defina a variavel `OBS_STUDIO_PATH` ou edite o caminho no `.bat`.
 
 Atalhos no OBS: **Configuracoes → Atalhos** → busque **Timer OBS**.
+
+---
+
+## Outros modos (opcionais)
+
+| Modo | Quando usar |
+|------|-------------|
+| **Overlay Python** | Teste rapido sem compilar: `python-overlay\start.bat` |
+| **Dock no OBS** | So ver o tempo no painel: `browser-dock\timer.html` |
+
+---
+
+## Overlay Python (opcional)
+
+1. OBS → **Ferramentas** → **WebSocket Server Settings** → ative o servidor
+2. Rode `python-overlay\start.bat`
+3. Na primeira vez ele cria o ambiente e instala as dependencias
+
+Config: `python-overlay/config.example.json` → `python-overlay/config.json`
 
 ---
 
@@ -104,8 +100,6 @@ Atalhos no OBS: **Configuracoes → Atalhos** → busque **Timer OBS**.
 4. Nome: `Timer de Gravacao`
 5. URL: caminho `file:///` ate `browser-dock/timer.html`
 
-Esse modo fica no painel do OBS (nao flutua sobre o jogo).
-
 ---
 
 ## Por que nao aparece na gravacao?
@@ -113,7 +107,7 @@ Esse modo fica no painel do OBS (nao flutua sobre o jogo).
 No Windows, o overlay usa uma funcao do sistema que **exclui a janela da captura**.
 
 Isso vale para Captura de Tela / Display Capture.
-Se voce adicionar o timer como **fonte na cena** (Browser Source, Texto, etc.), ele **vai** aparecer no video.
+Se voce adicionar o timer como **fonte na cena**, ele **vai** aparecer no video.
 
 ---
 
@@ -121,11 +115,10 @@ Se voce adicionar o timer como **fonte na cena** (Browser Source, Texto, etc.), 
 
 | Problema | O que fazer |
 |----------|-------------|
-| Overlay nao conecta | OBS aberto, WebSocket ligado, senha correta |
-| Pediu senha | Use Show Connect Info no OBS e preencha `config.json` |
+| Build falhou | Rode `Setup-Build-Env.bat`, feche/abra o terminal e tente de novo |
+| OBS esta aberto | Feche o OBS e rode o `.bat` de novo |
+| Plugin nao aparece | Confirme a pasta Steam do OBS e reinicie o OBS |
 | Overlay aparece no video | Atualize o Windows; nao use o timer como fonte da cena |
-| Python nao encontrado | Reinstale o Python marcando Add to PATH |
-| Plugin nao aparece | Feche o OBS e rode `scripts\install-plugin.bat` |
 
 ---
 
@@ -133,26 +126,21 @@ Se voce adicionar o timer como **fonte na cena** (Browser Source, Texto, etc.), 
 
 ```
 OBS-OverlayTimeShow/
-├── Iniciar-Overlay.bat      ← comece por aqui
+├── Setup-Build-Env.bat        ← primeira vez (PATH + ferramentas)
+├── Build-Install-Plugin.bat   ← compilar e instalar no OBS
 ├── README.md
-├── .gitignore
-├── python-overlay/          ← modo facil (Python)
-├── native-plugin/           ← codigo do plugin OBS
-├── browser-dock/            ← timer no painel do OBS
-├── scripts/                 ← instalar / compilar / limpar / GitHub
-└── docs/                    ← guias extras
+├── native-plugin/             ← codigo do plugin OBS
+├── python-overlay/            ← modo opcional (Python)
+├── browser-dock/              ← timer no painel do OBS
+└── scripts/                   ← setup / PATH / instalar / limpar
 ```
-
-Arquivos antigos (`overlay/`, `obs-plugin/`, `obs-dock/`) nao devem ficar na raiz.
-Se ainda existirem apos atualizar, rode uma vez: `scripts\limpar-legado.bat`
 
 ---
 
 ## Privacidade
 
-- Nao compartilhe seu `config.json` (pode ter senha do WebSocket)
 - Nao compartilhe pastas `.venv/`, `build-output/` ou caminhos pessoais do seu PC
-- Este README usa apenas exemplos genericos
+- Posicao do timer fica no AppData do OBS (`plugin_config`), fora da pasta Steam
 
 ---
 

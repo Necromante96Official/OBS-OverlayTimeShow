@@ -34,5 +34,5 @@ echo   4. cd %TEMPLATE_DIR%
 echo   5. cmake --preset windows-x64
 echo   6. cmake --build --preset windows-x64
 echo.
-echo Leia docs\COMPILAR-PLUGIN.md para detalhes completos.
+echo Depois rode Build-Install-Plugin.bat na raiz do projeto.
 pause

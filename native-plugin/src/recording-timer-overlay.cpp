@@ -288,6 +288,11 @@ void RecordingTimerOverlay::setOverlayVisible(bool visible) {
     move(overlayPos);
     show();
     raise();
+#ifdef _WIN32
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+#endif
     applyExcludeFromCapture();
   } else {
     hide();

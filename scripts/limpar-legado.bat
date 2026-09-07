@@ -14,5 +14,5 @@ echo.
 echo Raiz do projeto agora:
 dir /b /a:d
 echo.
-echo Pronto. Pastas novas: python-overlay, native-plugin, browser-dock, scripts, docs
+echo Pronto. Pastas novas: python-overlay, native-plugin, browser-dock, scripts
 pause
