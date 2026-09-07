@@ -40,6 +40,12 @@ struct SuiteStep {
   int fadeMs = 500;
   bool waitForFade = true;
 
+  // Mesclagem de passos: passos vizinhos com o mesmo groupId formam um grupo.
+  // Eles aparecem juntos na lista e uma condicao antes do grupo vale para o
+  // grupo inteiro, e nao so para o primeiro passo.
+  QString groupId;
+  QString groupName;
+
   QJsonObject toJson() const;
   static SuiteStep fromJson(const QJsonObject &obj);
   QString summary() const;

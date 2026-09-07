@@ -85,7 +85,17 @@ void SuiteEngine::advance()
   while (m_index < m_queue.size()) {
     if (m_skipNext) {
       m_skipNext = false;
-      ++m_index;
+      // Se o que vem depois da condicao e um grupo mesclado, pula o grupo
+      // inteiro, e nao apenas o primeiro passo dele.
+      const QString groupId = m_queue.at(m_index).groupId;
+      if (groupId.isEmpty()) {
+        ++m_index;
+      } else {
+        while (m_index < m_queue.size() &&
+               m_queue.at(m_index).groupId == groupId) {
+          ++m_index;
+        }
+      }
       continue;
     }
 

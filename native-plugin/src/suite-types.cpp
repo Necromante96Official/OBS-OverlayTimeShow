@@ -102,6 +102,8 @@ QJsonObject SuiteStep::toJson() const
   obj.insert(QStringLiteral("fadeIn"), fadeIn);
   obj.insert(QStringLiteral("fadeMs"), fadeMs);
   obj.insert(QStringLiteral("waitForFade"), waitForFade);
+  obj.insert(QStringLiteral("groupId"), groupId);
+  obj.insert(QStringLiteral("groupName"), groupName);
   return obj;
 }
 
@@ -122,6 +124,8 @@ SuiteStep SuiteStep::fromJson(const QJsonObject &obj)
   step.fadeIn = obj.value(QStringLiteral("fadeIn")).toBool(true);
   step.fadeMs = obj.value(QStringLiteral("fadeMs")).toInt(500);
   step.waitForFade = obj.value(QStringLiteral("waitForFade")).toBool(true);
+  step.groupId = obj.value(QStringLiteral("groupId")).toString();
+  step.groupName = obj.value(QStringLiteral("groupName")).toString();
   return step;
 }
 
@@ -188,13 +192,16 @@ QString SuiteStep::summary() const
                      .arg(quoted(source, QObject::tr("(fonte não escolhida)")),
                           formatDuration(fadeMs));
   case SuiteStepType::IfCurrentScene:
-    return QObject::tr("Só continuar se a cena atual for %1 (senão, pula o próximo passo)")
+    return QObject::tr("Só continuar se a cena atual for %1 (senão, pula o que "
+                       "vem logo abaixo)")
         .arg(quoted(scene, QObject::tr("(cena não escolhida)")));
   case SuiteStepType::IfSourceVisible:
     return visible
-               ? QObject::tr("Só continuar se a fonte %1 estiver visível (senão, pula o próximo passo)")
+               ? QObject::tr("Só continuar se a fonte %1 estiver visível (senão, "
+                             "pula o que vem logo abaixo)")
                      .arg(quoted(source, QObject::tr("(fonte não escolhida)")))
-               : QObject::tr("Só continuar se a fonte %1 estiver oculta (senão, pula o próximo passo)")
+               : QObject::tr("Só continuar se a fonte %1 estiver oculta (senão, "
+                             "pula o que vem logo abaixo)")
                      .arg(quoted(source, QObject::tr("(fonte não escolhida)")));
   case SuiteStepType::RestartMedia:
     return QObject::tr("Reiniciar a mídia %1 desde o começo")
