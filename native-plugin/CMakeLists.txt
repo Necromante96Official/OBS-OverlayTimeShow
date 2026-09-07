@@ -38,8 +38,12 @@ target_sources(
   ${CMAKE_PROJECT_NAME}
   PRIVATE
     src/plugin-main.cpp
+    src/camera-position.cpp
+    src/camera-position.hpp
     src/recording-timer-overlay.cpp
     src/recording-timer-overlay.hpp
+    src/rounded-corners-filter.cpp
+    src/rounded-corners-filter.hpp
     src/suite-types.cpp
     src/suite-types.hpp
     src/suite-store.cpp

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "camera-position.hpp"
 #include "suite-engine.hpp"
 #include "suite-store.hpp"
 
@@ -7,11 +8,14 @@
 #include <QWidget>
 
 class QCheckBox;
+class QComboBox;
 class QEvent;
 class QLabel;
 class QListWidget;
 class QListWidgetItem;
 class QPushButton;
+class QShowEvent;
+class QSpinBox;
 
 class SuiteDock : public QWidget {
   Q_OBJECT
@@ -23,6 +27,9 @@ protected:
   // Refaz o calculo de altura dos itens quando o painel muda de largura,
   // para o texto quebrado nao ficar cortado.
   bool eventFilter(QObject *watched, QEvent *event) override;
+  // As fontes da cena so existem depois que o OBS carrega, por isso a lista
+  // de camera e refeita a cada vez que o painel aparece.
+  void showEvent(QShowEvent *event) override;
 
 private slots:
   void refresh();
@@ -50,6 +57,11 @@ private slots:
   void onRunNow();
   void onStopWithOutro();
   void onOutroHotkeySetup();
+  void onCameraSourceChanged(int index);
+  void onCameraMarginChanged(int value);
+  void onCameraAllScenesToggled(bool enabled);
+  void onCameraAnchor(CameraPosition::Anchor anchor);
+  void onCameraCycle(int direction);
 
 private:
   QString selectedSuiteId() const;
@@ -76,6 +88,10 @@ private:
   void selectStepRowByIndex(int stepIndex);
   // Solta as condicoes que apontavam para um grupo que deixou de existir.
   void releaseConditionTargets(Suite *suite, const QString &groupId);
+  // Relista as fontes de video e recarrega as opcoes de posicao da camera.
+  void refreshCameraOptions();
+  // Explica por que a camera nao se moveu.
+  void warnCameraSourceMissing();
 
   SuiteStore *m_store = nullptr;
   SuiteEngine *m_engine = nullptr;
@@ -104,6 +120,9 @@ private:
   QPushButton *m_runBtn = nullptr;
   QPushButton *m_stopWithOutroBtn = nullptr;
   QPushButton *m_outroKeyBtn = nullptr;
+  QComboBox *m_cameraSourceCombo = nullptr;
+  QSpinBox *m_cameraMarginSpin = nullptr;
+  QCheckBox *m_cameraAllScenesCheck = nullptr;
 
   bool m_updating = false;
 };

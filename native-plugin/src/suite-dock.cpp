@@ -350,8 +350,83 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
   stepsLayout->addLayout(stepButtons);
   root->addWidget(stepsGroup, 2);
 
+  // ---- Posição da câmera ----------------------------------------------
+  auto *cameraGroup = new QGroupBox(tr("Posição da câmera"), this);
+  auto *cameraLayout = new QVBoxLayout(cameraGroup);
+  cameraLayout->setContentsMargins(8, 6, 8, 8);
+  cameraLayout->setSpacing(5);
+
+  auto *cameraTop = new QHBoxLayout();
+  cameraTop->setSpacing(4);
+  m_cameraSourceCombo = new QComboBox(cameraGroup);
+  m_cameraSourceCombo->setToolTip(
+      tr("Fonte que os atalhos e os botões abaixo movem."));
+  m_cameraSourceCombo->setSizePolicy(QSizePolicy::Expanding,
+                                     QSizePolicy::Fixed);
+  m_cameraMarginSpin = new QSpinBox(cameraGroup);
+  m_cameraMarginSpin->setRange(0, 500);
+  m_cameraMarginSpin->setSuffix(tr(" px"));
+  m_cameraMarginSpin->setToolTip(tr("Distância da borda da tela."));
+  cameraTop->addWidget(m_cameraSourceCombo, 1);
+  cameraTop->addWidget(m_cameraMarginSpin);
+  cameraLayout->addLayout(cameraTop);
+
+  // Os botões ficam na mesma disposição dos cantos que representam.
+  auto *cameraGrid = new QGridLayout();
+  cameraGrid->setSpacing(4);
+  struct CornerButton {
+    CameraPosition::Anchor anchor;
+    const char *label;
+    int row;
+    int column;
+  };
+  const CornerButton corners[] = {
+      {CameraPosition::Anchor::TopLeft, "\u2196", 0, 0},
+      {CameraPosition::Anchor::TopCenter, "\u2191", 0, 1},
+      {CameraPosition::Anchor::TopRight, "\u2197", 0, 2},
+      {CameraPosition::Anchor::BottomLeft, "\u2199", 1, 0},
+      {CameraPosition::Anchor::BottomCenter, "\u2193", 1, 1},
+      {CameraPosition::Anchor::BottomRight, "\u2198", 1, 2},
+  };
+  for (const CornerButton &corner : corners) {
+    auto *button = new QPushButton(QString::fromUtf8(corner.label), cameraGroup);
+    button->setToolTip(CameraPosition::anchorLabel(corner.anchor));
+    const CameraPosition::Anchor anchor = corner.anchor;
+    connect(button, &QPushButton::clicked, this,
+            [this, anchor]() { onCameraAnchor(anchor); });
+    cameraGrid->addWidget(button, corner.row, corner.column);
+  }
+  auto *prevCornerBtn =
+      new QPushButton(QString::fromUtf8("\u25C0"), cameraGroup);
+  prevCornerBtn->setToolTip(
+      tr("Volta um canto na rota (sentido anti-horário)."));
+  auto *nextCornerBtn =
+      new QPushButton(tr("Girar %1").arg(QString::fromUtf8("\u25B6")),
+                      cameraGroup);
+  nextCornerBtn->setToolTip(
+      tr("A cada toque leva a câmera para o próximo canto, dando a volta na "
+         "tela: superior esquerdo, em cima no centro, superior direito, "
+         "inferior direito, embaixo no centro, inferior esquerdo."));
+  connect(prevCornerBtn, &QPushButton::clicked, this,
+          [this]() { onCameraCycle(-1); });
+  connect(nextCornerBtn, &QPushButton::clicked, this,
+          [this]() { onCameraCycle(1); });
+  cameraGrid->addWidget(prevCornerBtn, 2, 0);
+  cameraGrid->addWidget(nextCornerBtn, 2, 1, 1, 2);
+  cameraLayout->addLayout(cameraGrid);
+
+  m_cameraAllScenesCheck =
+      new QCheckBox(tr("Mover em todas as cenas"), cameraGroup);
+  m_cameraAllScenesCheck->setToolTip(
+      tr("Desmarcado, muda só na cena atual. Marcado, a câmera vai para o "
+         "mesmo canto em todas as cenas onde ela aparece."));
+  cameraLayout->addWidget(m_cameraAllScenesCheck);
+  root->addWidget(cameraGroup);
+
   auto *footer = new QLabel(
-      tr("Atalhos: Configurações → Atalhos, uma linha por suíte."), this);
+      tr("Atalhos: Configurações → Atalhos, uma linha por suíte e uma por "
+         "canto da câmera."),
+      this);
   footer->setWordWrap(true);
   footer->setEnabled(false);
   footer->setToolTip(
@@ -404,8 +479,15 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
           &SuiteDock::onStopWithOutro);
   connect(m_outroKeyBtn, &QPushButton::clicked, this,
           &SuiteDock::onOutroHotkeySetup);
+  connect(m_cameraSourceCombo, &QComboBox::currentIndexChanged, this,
+          &SuiteDock::onCameraSourceChanged);
+  connect(m_cameraMarginSpin, &QSpinBox::valueChanged, this,
+          &SuiteDock::onCameraMarginChanged);
+  connect(m_cameraAllScenesCheck, &QCheckBox::toggled, this,
+          &SuiteDock::onCameraAllScenesToggled);
 
   refresh();
+  refreshCameraOptions();
 }
 
 bool SuiteDock::eventFilter(QObject *watched, QEvent *event)
@@ -2073,6 +2155,87 @@ void SuiteDock::onStopWithOutro()
   }
 
   m_engine->stopRecordingWithOutro();
+}
+
+void SuiteDock::showEvent(QShowEvent *event)
+{
+  QWidget::showEvent(event);
+  refreshCameraOptions();
+}
+
+void SuiteDock::refreshCameraOptions()
+{
+  if (!m_cameraSourceCombo)
+    return;
+
+  const QSignalBlocker blockCombo(m_cameraSourceCombo);
+  const QSignalBlocker blockMargin(m_cameraMarginSpin);
+  const QSignalBlocker blockScenes(m_cameraAllScenesCheck);
+
+  // sourceName() já escolhe a câmera sozinho quando nada foi configurado.
+  const QString configured = CameraPosition::sourceName();
+  const QStringList sources = CameraPosition::videoSources();
+
+  m_cameraSourceCombo->clear();
+  m_cameraSourceCombo->addItem(tr("(nenhuma)"), QString());
+  for (const QString &name : sources)
+    m_cameraSourceCombo->addItem(name, name);
+
+  int index = configured.isEmpty() ? 0 : m_cameraSourceCombo->findData(configured);
+  if (index < 0) {
+    // A fonte salva não existe agora: mantém o nome para não perder o ajuste.
+    m_cameraSourceCombo->addItem(configured, configured);
+    index = m_cameraSourceCombo->count() - 1;
+  }
+  m_cameraSourceCombo->setCurrentIndex(index);
+  m_cameraMarginSpin->setValue(CameraPosition::margin());
+  m_cameraAllScenesCheck->setChecked(CameraPosition::allScenes());
+}
+
+void SuiteDock::onCameraSourceChanged(int index)
+{
+  if (!m_cameraSourceCombo || index < 0)
+    return;
+  CameraPosition::setSourceName(m_cameraSourceCombo->currentData().toString());
+}
+
+void SuiteDock::onCameraMarginChanged(int value)
+{
+  CameraPosition::setMargin(value);
+}
+
+void SuiteDock::onCameraAllScenesToggled(bool enabled)
+{
+  CameraPosition::setAllScenes(enabled);
+}
+
+void SuiteDock::onCameraAnchor(CameraPosition::Anchor anchor)
+{
+  if (CameraPosition::apply(anchor))
+    return;
+  warnCameraSourceMissing();
+}
+
+void SuiteDock::onCameraCycle(int direction)
+{
+  if (CameraPosition::cycle(direction))
+    return;
+  warnCameraSourceMissing();
+}
+
+void SuiteDock::warnCameraSourceMissing()
+{
+  const QString name = CameraPosition::sourceName();
+  if (name.isEmpty()) {
+    QMessageBox::information(
+        this, tr("Posição da câmera"),
+        tr("Escolha primeiro qual fonte os atalhos devem mover."));
+    return;
+  }
+  QMessageBox::information(
+      this, tr("Posição da câmera"),
+      tr("A fonte «%1» não está na cena atual, então não há o que mover.")
+          .arg(name));
 }
 
 void SuiteDock::onOutroHotkeySetup()
