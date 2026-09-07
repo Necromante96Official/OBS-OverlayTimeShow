@@ -1,5 +1,6 @@
 #include "suite-dock.hpp"
 #include "suite-actions.hpp"
+#include "suite-outro-hotkey.hpp"
 
 #include <obs-module.h>
 
@@ -25,6 +26,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTimer>
 #include <QUuid>
@@ -96,12 +98,16 @@ QString stepTypeLabel(SuiteStepType type)
     return QObject::tr("Ajustar o volume de um áudio");
   case SuiteStepType::AudioFade:
     return QObject::tr("Transição de áudio (fade in / fade out)");
+  case SuiteStepType::ScreenFade:
+    return QObject::tr("Escurecer ou clarear a tela toda");
   case SuiteStepType::DelayMs:
     return QObject::tr("Esperar um tempo");
   case SuiteStepType::IfCurrentScene:
     return QObject::tr("Condição: a cena atual é...");
   case SuiteStepType::IfSourceVisible:
     return QObject::tr("Condição: a fonte está visível ou oculta");
+  case SuiteStepType::IfTrigger:
+    return QObject::tr("Condição: o que disparou a suíte");
   case SuiteStepType::OpenUrl:
     return QObject::tr("Abrir um programa, pasta ou site");
   }
@@ -122,9 +128,10 @@ QString stepTypeHelp(SuiteStepType type)
   case SuiteStepType::SetSourceVisible:
     return QObject::tr(
         "Liga (visível) ou desliga (oculta) o olho de uma fonte dentro da cena "
-        "escolhida. Se a fonte tiver áudio, você pode pedir fade: ao mostrar, o "
-        "som sobe do silêncio; ao ocultar, o som desce antes de a fonte "
-        "desaparecer.");
+        "escolhida. A transição da fonte é a mesma do OBS: escolha, por "
+        "exemplo, esmaecer, e a fonte aparece ou sai aos poucos, na "
+        "velocidade que você definir. Se a fonte tiver áudio, você também pode "
+        "pedir fade no som.");
   case SuiteStepType::RestartMedia:
     return QObject::tr(
         "Faz um vídeo, áudio ou música voltar ao começo e tocar de novo.");
@@ -141,19 +148,33 @@ QString stepTypeHelp(SuiteStepType type)
         "Sobe o áudio do silêncio até o volume escolhido (fade in) ou desce "
         "até o silêncio (fade out), sem cortes bruscos. Vale para qualquer "
         "fonte que tenha áudio: microfone, jogo, música, vídeo.");
+  case SuiteStepType::ScreenFade:
+    return QObject::tr(
+        "Cobre a tela inteira com preto e esmaece. \"Clarear\" começa no preto "
+        "e revela a imagem, ideal no início da gravação; \"Escurecer\" leva a "
+        "imagem até o preto total, ideal antes de encerrar. O plugin cria "
+        "sozinho a fonte \"Suítes: Tela Preta\" na cena e a deixa por cima de "
+        "tudo. Este passo sempre espera o esmaecer terminar.");
   case SuiteStepType::DelayMs:
     return QObject::tr(
         "Faz uma pausa antes de executar o próximo passo. Use para dar tempo à "
         "transição ou ao jogo abrir.");
   case SuiteStepType::IfCurrentScene:
     return QObject::tr(
-        "Verifica se a cena que está no ar é a escolhida. Se não for, o passo "
-        "logo abaixo desta condição é ignorado.");
+        "Verifica se a cena que está no ar é a escolhida. Se não for, o alvo "
+        "da condição (o passo logo abaixo ou o grupo que você escolher) não "
+        "roda.");
   case SuiteStepType::IfSourceVisible:
     return QObject::tr(
         "Verifica se a fonte está visível (ou oculta, se você escolher assim). "
-        "Se a verificação falhar, o passo logo abaixo desta condição é "
-        "ignorado.");
+        "Se a verificação falhar, o alvo da condição (o passo logo abaixo ou o "
+        "grupo que você escolher) não roda.");
+  case SuiteStepType::IfTrigger:
+    return QObject::tr(
+        "Verifica o que fez a suíte rodar: o início da gravação, o fim da "
+        "gravação ou o atalho. É assim que a mesma suíte faz uma coisa ao "
+        "começar a gravar e outra ao encerrar. Para o fim da gravação "
+        "funcionar, deixe marcado \"Rodar ao encerrar a gravação\" na suíte.");
   case SuiteStepType::OpenUrl:
     return QObject::tr(
         "Abre um site, uma pasta do Windows ou um programa. Exemplos: "
@@ -234,6 +255,24 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
   stepsLayout->setContentsMargins(8, 6, 8, 8);
   stepsLayout->setSpacing(5);
 
+  auto *whenRow = new QHBoxLayout();
+  whenRow->setSpacing(10);
+  m_runOnStartCheck =
+      new QCheckBox(tr("Rodar ao iniciar a gravação"), stepsGroup);
+  m_runOnStartCheck->setToolTip(
+      tr("Quando você aperta para gravar (pelo OBS ou pela tecla de atalho da "
+         "gravação), esta suíte roda."));
+  m_runOnStopCheck =
+      new QCheckBox(tr("Rodar ao encerrar a gravação"), stepsGroup);
+  m_runOnStopCheck->setToolTip(
+      tr("Quando a gravação para, esta suíte roda de novo. Use a condição "
+         "\"o que disparou a suíte\" para separar o que acontece em cada "
+         "momento."));
+  whenRow->addWidget(m_runOnStartCheck);
+  whenRow->addWidget(m_runOnStopCheck);
+  whenRow->addStretch(1);
+  stepsLayout->addLayout(whenRow);
+
   m_openFolderCheck = new QCheckBox(
       tr("Ao terminar a gravação, abrir a pasta do arquivo"), stepsGroup);
   m_openFolderCheck->setToolTip(
@@ -293,8 +332,21 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
   stepButtons->addWidget(m_upBtn, 1, 0);
   stepButtons->addWidget(m_downBtn, 1, 1);
   stepButtons->addWidget(m_runBtn, 1, 2);
+  m_stopWithOutroBtn =
+      new QPushButton(tr("Encerrar gravação com transição"), stepsGroup);
+  m_stopWithOutroBtn->setToolTip(
+      tr("Roda o grupo de encerramento, espera as transições terminarem e só "
+         "então encerra a gravação, para o esmaecer entrar no arquivo. O botão "
+         "de parar do próprio OBS fecha o arquivo na hora e não dá tempo para "
+         "isso."));
   stepButtons->addWidget(m_mergeStepsBtn, 2, 0);
   stepButtons->addWidget(m_unmergeStepsBtn, 2, 1, 1, 2);
+  m_outroKeyBtn = new QPushButton(tr("Atalho de parada..."), stepsGroup);
+  m_outroKeyBtn->setToolTip(
+      tr("Passa a sua tecla de parar gravação do OBS para o encerramento "
+         "suave, para você continuar usando a mesma tecla de sempre."));
+  stepButtons->addWidget(m_stopWithOutroBtn, 3, 0, 1, 2);
+  stepButtons->addWidget(m_outroKeyBtn, 3, 2);
   stepsLayout->addLayout(stepButtons);
   root->addWidget(stepsGroup, 2);
 
@@ -327,6 +379,10 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
           &SuiteDock::onClearActive);
   connect(m_openFolderCheck, &QCheckBox::toggled, this,
           &SuiteDock::onOpenFolderToggled);
+  connect(m_runOnStartCheck, &QCheckBox::toggled, this,
+          &SuiteDock::onRunOnStartToggled);
+  connect(m_runOnStopCheck, &QCheckBox::toggled, this,
+          &SuiteDock::onRunOnStopToggled);
   connect(m_addStepBtn, &QPushButton::clicked, this, &SuiteDock::onAddStep);
   connect(m_editStepBtn, &QPushButton::clicked, this, &SuiteDock::onEditStep);
   connect(m_stepList, &QListWidget::itemDoubleClicked, this,
@@ -344,6 +400,10 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
   connect(m_stepList, &QListWidget::customContextMenuRequested, this,
           &SuiteDock::onStepContextMenu);
   connect(m_runBtn, &QPushButton::clicked, this, &SuiteDock::onRunNow);
+  connect(m_stopWithOutroBtn, &QPushButton::clicked, this,
+          &SuiteDock::onStopWithOutro);
+  connect(m_outroKeyBtn, &QPushButton::clicked, this,
+          &SuiteDock::onOutroHotkeySetup);
 
   refresh();
 }
@@ -415,6 +475,8 @@ void SuiteDock::updateButtonStates()
   m_activateBtn->setEnabled(hasSuite);
   m_deactivateBtn->setEnabled(hasActive);
   m_openFolderCheck->setEnabled(hasSuite);
+  m_runOnStartCheck->setEnabled(hasSuite);
+  m_runOnStopCheck->setEnabled(hasSuite);
 
   const int stepRow = m_stepList->currentRow();
   const int stepIndex = currentStepIndex();
@@ -437,6 +499,7 @@ void SuiteDock::updateButtonStates()
   m_mergeStepsBtn->setEnabled(markedSteps >= 2);
   m_unmergeStepsBtn->setEnabled(rowInGroup);
   m_runBtn->setEnabled(hasSuite || hasActive);
+  m_stopWithOutroBtn->setEnabled(hasActive);
 }
 
 void SuiteDock::refresh()
@@ -501,16 +564,21 @@ void SuiteDock::onSelectionChanged()
 
   Suite *suite = selectedSuite();
   m_stepList->clear();
-  m_openFolderCheck->blockSignals(true);
+
+  const QSignalBlocker blockFolder(m_openFolderCheck);
+  const QSignalBlocker blockStart(m_runOnStartCheck);
+  const QSignalBlocker blockStop(m_runOnStopCheck);
   if (!suite) {
     m_openFolderCheck->setChecked(false);
-    m_openFolderCheck->blockSignals(false);
+    m_runOnStartCheck->setChecked(false);
+    m_runOnStopCheck->setChecked(false);
     updateButtonStates();
     return;
   }
 
   m_openFolderCheck->setChecked(suite->openRecordingFolderOnStop);
-  m_openFolderCheck->blockSignals(false);
+  m_runOnStartCheck->setChecked(suite->runOnRecordingStart);
+  m_runOnStopCheck->setChecked(suite->runOnRecordingStop);
 
   const QVector<SuiteStep> &steps = suite->steps;
   int block = 1;
@@ -544,17 +612,28 @@ void SuiteDock::onSelectionChanged()
     const QString name = steps.at(i).groupName.trimmed().isEmpty()
                              ? tr("Grupo sem nome")
                              : steps.at(i).groupName.trimmed();
-    auto *header = new QListWidgetItem(
-        tr("%1 · Grupo: %2  ·  %3 mescladas, rodam em sequência")
-            .arg(block)
-            .arg(name)
-            .arg(members),
-        m_stepList);
+    const SuiteGroupWhen when = steps.at(i).groupWhen;
+    QString headerText = tr("%1 · Grupo: %2  ·  %3 ações  ·  %4")
+                             .arg(block)
+                             .arg(name)
+                             .arg(members)
+                             .arg(suiteGroupWhenLabel(when));
+    if (steps.at(i).groupFade == SuiteGroupFade::FromBlack) {
+      headerText +=
+          tr("\n      começa na tela preta e clareia em %1 ms quando as ações "
+             "terminam")
+              .arg(steps.at(i).groupFadeMs);
+    } else if (steps.at(i).groupFade == SuiteGroupFade::ToBlack) {
+      headerText += tr("\n      escurece até o preto em %1 ms antes das ações")
+                        .arg(steps.at(i).groupFadeMs);
+    }
+    auto *header = new QListWidgetItem(headerText, m_stepList);
     header->setData(kRoleStepIndex, -1);
     header->setData(kRoleGroupId, groupId);
     header->setToolTip(
-        tr("Um grupo conta como um bloco só: uma condição colocada antes dele "
-           "vale para todas as ações de dentro."));
+        tr("Clique duas vezes (ou use o botão direito) para escolher o nome e "
+           "quando este grupo roda: ao iniciar a gravação, ao encerrar, ou "
+           "sempre."));
     QFont headerFont = header->font();
     headerFont.setBold(true);
     header->setFont(headerFont);
@@ -832,6 +911,24 @@ void SuiteDock::onOpenFolderToggled(bool checked)
   persistSelectedSuite();
 }
 
+void SuiteDock::onRunOnStartToggled(bool checked)
+{
+  Suite *suite = selectedSuite();
+  if (!suite)
+    return;
+  suite->runOnRecordingStart = checked;
+  persistSelectedSuite();
+}
+
+void SuiteDock::onRunOnStopToggled(bool checked)
+{
+  Suite *suite = selectedSuite();
+  if (!suite)
+    return;
+  suite->runOnRecordingStop = checked;
+  persistSelectedSuite();
+}
+
 bool SuiteDock::editStepDialog(SuiteStep &step, bool isNew)
 {
   QDialog dialog(this);
@@ -860,12 +957,17 @@ bool SuiteDock::editStepDialog(SuiteStep &step, bool isNew)
   typeCombo->addItem(stepTypeLabel(SuiteStepType::AudioFade),
                      static_cast<int>(SuiteStepType::AudioFade));
   typeCombo->insertSeparator(typeCombo->count());
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::ScreenFade),
+                     static_cast<int>(SuiteStepType::ScreenFade));
+  typeCombo->insertSeparator(typeCombo->count());
   typeCombo->addItem(stepTypeLabel(SuiteStepType::DelayMs),
                      static_cast<int>(SuiteStepType::DelayMs));
   typeCombo->addItem(stepTypeLabel(SuiteStepType::IfCurrentScene),
                      static_cast<int>(SuiteStepType::IfCurrentScene));
   typeCombo->addItem(stepTypeLabel(SuiteStepType::IfSourceVisible),
                      static_cast<int>(SuiteStepType::IfSourceVisible));
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::IfTrigger),
+                     static_cast<int>(SuiteStepType::IfTrigger));
   typeCombo->insertSeparator(typeCombo->count());
   typeCombo->addItem(stepTypeLabel(SuiteStepType::OpenUrl),
                      static_cast<int>(SuiteStepType::OpenUrl));
@@ -907,15 +1009,84 @@ bool SuiteDock::editStepDialog(SuiteStep &step, bool isNew)
   visibleCombo->addItem(tr("Ocultar (deixar invisível)"), false);
   auto *visibleLabel = addRow(tr("Ação na fonte:"), visibleCombo);
 
+  // Transição de mostrar/ocultar da própria fonte, como no olho do OBS.
+  auto *itemTransitionCombo = new QComboBox(&dialog);
+  itemTransitionCombo->addItem(tr("Não mexer (usar o que já está na fonte)"),
+                               QString());
+  itemTransitionCombo->addItem(tr("Sem transição (aparece ou sai na hora)"),
+                               QStringLiteral("none"));
+  for (const auto &type : SuiteActions::itemTransitionTypes())
+    itemTransitionCombo->addItem(type.second, type.first);
+  auto *itemTransitionLabel =
+      addRow(tr("Transição da fonte:"), itemTransitionCombo);
+
+  auto *itemTransitionSpin = new QSpinBox(&dialog);
+  itemTransitionSpin->setRange(0, 60000);
+  itemTransitionSpin->setSuffix(QStringLiteral(" ms"));
+  itemTransitionSpin->setSingleStep(50);
+  auto *itemTransitionSpinLabel = addRow(
+      tr("Velocidade da transição da fonte:"), itemTransitionSpin);
+
   auto *expectCombo = new QComboBox(&dialog);
   expectCombo->addItem(tr("Só continua se estiver visível"), true);
   expectCombo->addItem(tr("Só continua se estiver oculta"), false);
   auto *expectLabel = addRow(tr("Condição:"), expectCombo);
 
+  auto *triggerCombo = new QComboBox(&dialog);
+  triggerCombo->addItem(tr("A gravação começou"),
+                        static_cast<int>(SuiteTrigger::RecordingStarted));
+  triggerCombo->addItem(tr("A gravação terminou"),
+                        static_cast<int>(SuiteTrigger::RecordingStopped));
+  triggerCombo->addItem(tr("O atalho ou \"Testar agora\" foi usado"),
+                        static_cast<int>(SuiteTrigger::Manual));
+  auto *triggerLabel = addRow(tr("Só continuar quando:"), triggerCombo);
+
+  // Alvo da condição: o bloco seguinte ou um grupo mesclado desta suíte.
+  auto *targetCombo = new QComboBox(&dialog);
+  targetCombo->addItem(tr("O passo ou grupo logo abaixo"), QString());
+  {
+    QStringList added;
+    if (const Suite *current = selectedSuite()) {
+      for (const SuiteStep &other : current->steps) {
+        if (other.groupId.isEmpty() || added.contains(other.groupId))
+          continue;
+        added.append(other.groupId);
+        const QString name = other.groupName.trimmed().isEmpty()
+                                 ? tr("Grupo sem nome")
+                                 : other.groupName.trimmed();
+        targetCombo->addItem(tr("Grupo: %1").arg(name), other.groupId);
+      }
+    }
+    // Um grupo apagado depois nao pode sumir da condicao sem avisar.
+    if (!step.conditionGroupId.isEmpty() &&
+        !added.contains(step.conditionGroupId)) {
+      targetCombo->addItem(tr("Grupo removido: %1").arg(step.conditionGroupName),
+                           step.conditionGroupId);
+    }
+  }
+  auto *targetLabel = addRow(tr("Aplicar a condição a:"), targetCombo);
+
   auto *muteCombo = new QComboBox(&dialog);
   muteCombo->addItem(tr("Silenciar (deixar no mudo)"), true);
   muteCombo->addItem(tr("Reativar o som (tirar do mudo)"), false);
   auto *muteLabel = addRow(tr("Ação no áudio:"), muteCombo);
+
+  auto *screenDirCombo = new QComboBox(&dialog);
+  screenDirCombo->addItem(tr("Clarear — começar no preto e revelar a imagem"),
+                          true);
+  screenDirCombo->addItem(tr("Escurecer — levar a imagem até o preto total"),
+                          false);
+  auto *screenDirLabel = addRow(tr("O que fazer com a tela:"), screenDirCombo);
+
+  auto *screenMsSpin = new QSpinBox(&dialog);
+  screenMsSpin->setRange(100, 60000);
+  screenMsSpin->setSuffix(QStringLiteral(" ms"));
+  screenMsSpin->setSingleStep(500);
+  screenMsSpin->setToolTip(
+      tr("2000 ms são dois segundos reais de esmaecer. O passo espera este "
+         "tempo terminar antes de seguir."));
+  auto *screenMsLabel =
+      addRow(tr("Duração (2000 ms = 2 segundos):"), screenMsSpin);
 
   auto *fadeDirCombo = new QComboBox(&dialog);
   fadeDirCombo->addItem(tr("Fade in — subir do silêncio até o volume"), true);
@@ -1009,7 +1180,8 @@ bool SuiteDock::editStepDialog(SuiteStep &step, bool isNew)
     const bool needScene = type == SuiteStepType::SetScene ||
                            type == SuiteStepType::SetSourceVisible ||
                            type == SuiteStepType::IfCurrentScene ||
-                           type == SuiteStepType::IfSourceVisible;
+                           type == SuiteStepType::IfSourceVisible ||
+                           type == SuiteStepType::ScreenFade;
     const bool needSource = type == SuiteStepType::SetSourceVisible ||
                             type == SuiteStepType::IfSourceVisible ||
                             type == SuiteStepType::SetMute ||
@@ -1042,10 +1214,27 @@ bool SuiteDock::editStepDialog(SuiteStep &step, bool isNew)
     setRowVisible(sourceLabel, sourceCombo, needSource);
     setRowVisible(visibleLabel, visibleCombo,
                   type == SuiteStepType::SetSourceVisible);
+    setRowVisible(itemTransitionLabel, itemTransitionCombo,
+                  type == SuiteStepType::SetSourceVisible);
+    setRowVisible(
+        itemTransitionSpinLabel, itemTransitionSpin,
+        type == SuiteStepType::SetSourceVisible &&
+            !itemTransitionCombo->currentData().toString().isEmpty() &&
+            itemTransitionCombo->currentData().toString() !=
+                QLatin1String("none"));
     setRowVisible(expectLabel, expectCombo,
                   type == SuiteStepType::IfSourceVisible);
+    setRowVisible(triggerLabel, triggerCombo, type == SuiteStepType::IfTrigger);
+    setRowVisible(targetLabel, targetCombo,
+                  type == SuiteStepType::IfCurrentScene ||
+                      type == SuiteStepType::IfSourceVisible ||
+                      type == SuiteStepType::IfTrigger);
     setRowVisible(muteLabel, muteCombo, type == SuiteStepType::SetMute);
     setRowVisible(fadeDirLabel, fadeDirCombo, type == SuiteStepType::AudioFade);
+    setRowVisible(screenDirLabel, screenDirCombo,
+                  type == SuiteStepType::ScreenFade);
+    setRowVisible(screenMsLabel, screenMsSpin,
+                  type == SuiteStepType::ScreenFade);
     setRowVisible(fadeCheckLabel, fadeCheck, canOfferFade);
     setRowVisible(volumeLabel, volumeSpin, needVolume);
     setRowVisible(fadeMsLabel, fadeMsSpin, fadeOn);
@@ -1064,6 +1253,8 @@ bool SuiteDock::editStepDialog(SuiteStep &step, bool isNew)
       sceneLabel->setText(tr("Ir para a cena:"));
     else if (type == SuiteStepType::IfCurrentScene)
       sceneLabel->setText(tr("Cena que precisa estar no ar:"));
+    else if (type == SuiteStepType::ScreenFade)
+      sceneLabel->setText(tr("Cena (vazio = a que estiver no ar):"));
     else
       sceneLabel->setText(tr("Cena onde está a fonte:"));
 
@@ -1090,6 +1281,9 @@ bool SuiteDock::editStepDialog(SuiteStep &step, bool isNew)
           [&](const QString &) { applyType(); });
   connect(visibleCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
           &dialog, [&](int) { applyType(); });
+  connect(itemTransitionCombo,
+          QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog,
+          [&](int) { applyType(); });
   connect(fadeDirCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
           &dialog, [&](int) { applyType(); });
   connect(fadeCheck, &QCheckBox::toggled, &dialog,
@@ -1111,10 +1305,27 @@ bool SuiteDock::editStepDialog(SuiteStep &step, bool isNew)
   muteCombo->setCurrentIndex(step.muted ? 0 : 1);
   volumeSpin->setValue(step.volume * 100.0);
   fadeDirCombo->setCurrentIndex(step.fadeIn ? 0 : 1);
+  screenDirCombo->setCurrentIndex(step.fadeIn ? 0 : 1);
+  screenMsSpin->setValue(step.screenFadeMs);
   fadeCheck->setChecked(step.fadeAudio);
   fadeMsSpin->setValue(step.fadeMs);
   waitFadeCheck->setChecked(step.waitForFade);
   urlEdit->setText(step.url);
+  itemTransitionCombo->setCurrentIndex(
+      qMax(0, itemTransitionCombo->findData(step.itemTransitionId)));
+  itemTransitionSpin->setValue(step.itemTransitionMs);
+  for (int i = 0; i < triggerCombo->count(); ++i) {
+    if (triggerCombo->itemData(i).toInt() == static_cast<int>(step.trigger)) {
+      triggerCombo->setCurrentIndex(i);
+      break;
+    }
+  }
+  for (int i = 0; i < targetCombo->count(); ++i) {
+    if (targetCombo->itemData(i).toString() == step.conditionGroupId) {
+      targetCombo->setCurrentIndex(i);
+      break;
+    }
+  }
   applyType();
   sourceCombo->setCurrentText(step.source);
   applyType();
@@ -1143,15 +1354,62 @@ bool SuiteDock::editStepDialog(SuiteStep &step, bool isNew)
   step.visible = type == SuiteStepType::IfSourceVisible
                      ? expectCombo->currentData().toBool()
                      : visibleCombo->currentData().toBool();
+  step.screenFadeMs = screenMsSpin->value();
   step.fadeIn = type == SuiteStepType::AudioFade
                     ? fadeDirCombo->currentData().toBool()
-                    : step.visible;
+                    : (type == SuiteStepType::ScreenFade
+                           ? screenDirCombo->currentData().toBool()
+                           : step.visible);
   step.fadeMs = fadeMsSpin->value();
   step.waitForFade = waitFadeCheck->isChecked();
   step.fadeAudio = fadeCheck->isChecked() &&
                    SuiteActions::sourceHasAudio(step.source) &&
                    (type == SuiteStepType::SetVolume ||
                     type == SuiteStepType::SetSourceVisible);
+  step.trigger = static_cast<SuiteTrigger>(triggerCombo->currentData().toInt());
+
+  if (type == SuiteStepType::SetSourceVisible) {
+    step.itemTransitionId = itemTransitionCombo->currentData().toString();
+    step.itemTransitionName =
+        step.itemTransitionId.isEmpty() ||
+                step.itemTransitionId == QLatin1String("none")
+            ? QString()
+            : itemTransitionCombo->currentText();
+    step.itemTransitionMs = itemTransitionSpin->value();
+  } else {
+    step.itemTransitionId.clear();
+    step.itemTransitionName.clear();
+  }
+
+  step.conditionGroupId.clear();
+  step.conditionGroupName.clear();
+  if (step.isCondition()) {
+    step.conditionGroupId = targetCombo->currentData().toString();
+    if (!step.conditionGroupId.isEmpty()) {
+      if (const Suite *current = selectedSuite()) {
+        for (const SuiteStep &other : current->steps) {
+          if (other.groupId == step.conditionGroupId) {
+            step.conditionGroupName = other.groupName;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Uma condicao de fim de gravacao so faz sentido se a suite rodar nessa hora.
+  if (step.type == SuiteStepType::IfTrigger &&
+      step.trigger == SuiteTrigger::RecordingStopped) {
+    Suite *current = selectedSuite();
+    if (current && !current->runOnRecordingStop) {
+      // Quem chamou o diálogo salva a suíte logo em seguida.
+      current->runOnRecordingStop = true;
+      QMessageBox::information(
+          this, tr("Rodar ao encerrar a gravação"),
+          tr("Liguei a opção \"Rodar ao encerrar a gravação\" nesta suíte, "
+             "senão esta condição nunca seria verdadeira."));
+    }
+  }
   return true;
 }
 
@@ -1202,6 +1460,20 @@ QList<int> SuiteDock::markedStepIndices() const
   return indices;
 }
 
+void SuiteDock::releaseConditionTargets(Suite *suite, const QString &groupId)
+{
+  if (!suite || groupId.isEmpty())
+    return;
+  // O grupo deixou de existir: as condições voltam a valer para o que vem
+  // logo abaixo delas, em vez de apontarem para o vazio.
+  for (SuiteStep &step : suite->steps) {
+    if (step.conditionGroupId != groupId)
+      continue;
+    step.conditionGroupId.clear();
+    step.conditionGroupName.clear();
+  }
+}
+
 void SuiteDock::selectStepRowByIndex(int stepIndex)
 {
   for (int i = 0; i < m_stepList->count(); ++i) {
@@ -1221,28 +1493,8 @@ void SuiteDock::onEditStep()
 
   const int index = currentStepIndex();
   if (index < 0) {
-    // Cabecalho de grupo: editar o grupo significa renomear.
-    const QString groupId = currentRowGroupId();
-    if (groupId.isEmpty())
-      return;
-    QString currentName;
-    for (const SuiteStep &step : suite->steps) {
-      if (step.groupId == groupId) {
-        currentName = step.groupName;
-        break;
-      }
-    }
-    bool ok = false;
-    const QString name = QInputDialog::getText(
-        this, tr("Renomear grupo"), tr("Nome do grupo:"), QLineEdit::Normal,
-        currentName, &ok);
-    if (!ok)
-      return;
-    for (SuiteStep &step : suite->steps) {
-      if (step.groupId == groupId)
-        step.groupName = name.trimmed();
-    }
-    persistSelectedSuite();
+    // Cabecalho de grupo: abre as opcoes do grupo.
+    editGroup(currentRowGroupId());
     return;
   }
 
@@ -1282,6 +1534,7 @@ void SuiteDock::onRemoveStep()
       if (suite->steps.at(i).groupId == groupId)
         suite->steps.removeAt(i);
     }
+    releaseConditionTargets(suite, groupId);
     persistSelectedSuite();
     return;
   }
@@ -1393,6 +1646,182 @@ void SuiteDock::onMoveStepDown()
   selectStepRowByIndex(nextEnd - 1);
 }
 
+bool SuiteDock::groupOptionsDialog(SuiteGroupInfo &info, bool isNew)
+{
+  QDialog dialog(this);
+  dialog.setWindowTitle(isNew ? tr("Mesclar passos em um grupo")
+                              : tr("Opções do grupo"));
+  dialog.setMinimumWidth(440);
+
+  auto *root = new QVBoxLayout(&dialog);
+  root->setSpacing(10);
+
+  auto *form = new QFormLayout();
+  form->setSpacing(8);
+
+  auto *nameEdit = new QLineEdit(info.name, &dialog);
+  nameEdit->setPlaceholderText(tr("Exemplo: Começando a gravação"));
+  form->addRow(new QLabel(tr("Nome do grupo:"), &dialog), nameEdit);
+
+  auto *whenCombo = new QComboBox(&dialog);
+  for (const SuiteGroupWhen option :
+       {SuiteGroupWhen::Always, SuiteGroupWhen::RecordingStarted,
+        SuiteGroupWhen::RecordingStopped, SuiteGroupWhen::Manual}) {
+    whenCombo->addItem(suiteGroupWhenOption(option), static_cast<int>(option));
+  }
+  for (int i = 0; i < whenCombo->count(); ++i) {
+    if (whenCombo->itemData(i).toInt() == static_cast<int>(info.when)) {
+      whenCombo->setCurrentIndex(i);
+      break;
+    }
+  }
+  form->addRow(new QLabel(tr("Este grupo roda:"), &dialog), whenCombo);
+
+  // Transicao de tela do grupo: sair do preto no fim, ou ir ao preto antes.
+  auto *fadeCombo = new QComboBox(&dialog);
+  for (const SuiteGroupFade option :
+       {SuiteGroupFade::None, SuiteGroupFade::FromBlack,
+        SuiteGroupFade::ToBlack}) {
+    fadeCombo->addItem(suiteGroupFadeOption(option), static_cast<int>(option));
+  }
+  fadeCombo->setCurrentIndex(
+      qMax(0, fadeCombo->findData(static_cast<int>(info.fade))));
+  auto *fadeLabel = new QLabel(tr("Transição de tela do grupo:"), &dialog);
+  form->addRow(fadeLabel, fadeCombo);
+
+  auto *durationSpin = new QSpinBox(&dialog);
+  durationSpin->setRange(100, 60000);
+  durationSpin->setSuffix(QStringLiteral(" ms"));
+  durationSpin->setSingleStep(500);
+  durationSpin->setValue(info.fadeMs);
+  auto *durationLabel =
+      new QLabel(tr("Velocidade da transição (2000 ms = 2 s):"), &dialog);
+  form->addRow(durationLabel, durationSpin);
+  root->addLayout(form);
+
+  auto updateDurationRow = [&]() {
+    const bool on = fadeCombo->currentData().toInt() !=
+                    static_cast<int>(SuiteGroupFade::None);
+    durationLabel->setVisible(on);
+    durationSpin->setVisible(on);
+    dialog.adjustSize();
+  };
+  connect(fadeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          &dialog, [&](int) { updateDurationRow(); });
+  updateDurationRow();
+
+  auto *hint = new QLabel(
+      tr("As ações do grupo rodam em sequência, de cima para baixo. Escolhendo "
+         "\"Ao iniciar a gravação\", elas acontecem quando você manda gravar; "
+         "escolhendo \"Ao encerrar a gravação\", acontecem quando a gravação "
+         "para.\n\nNo grupo de início use \"Clarear\": a gravação começa na "
+         "tela preta, as ações acontecem escondidas e a imagem aparece aos "
+         "poucos. No grupo de encerramento use \"Escurecer\": a imagem vai até "
+         "o preto e só então as ações rodam, com a gravação fechando no "
+         "escuro."),
+      &dialog);
+  hint->setWordWrap(true);
+  hint->setEnabled(false);
+  root->addWidget(hint);
+
+  auto *buttons = new QDialogButtonBox(
+      QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  buttons->button(QDialogButtonBox::Ok)
+      ->setText(isNew ? tr("Mesclar") : tr("Salvar"));
+  buttons->button(QDialogButtonBox::Cancel)->setText(tr("Cancelar"));
+  root->addWidget(buttons);
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+  if (dialog.exec() != QDialog::Accepted)
+    return false;
+
+  info.name = nameEdit->text().trimmed();
+  info.when = static_cast<SuiteGroupWhen>(whenCombo->currentData().toInt());
+  info.fade = static_cast<SuiteGroupFade>(fadeCombo->currentData().toInt());
+  info.fadeMs = durationSpin->value();
+  return true;
+}
+
+void SuiteDock::editGroup(const QString &groupId)
+{
+  Suite *suite = selectedSuite();
+  if (!suite || groupId.isEmpty())
+    return;
+
+  SuiteGroupInfo info;
+  bool found = false;
+  for (const SuiteStep &step : suite->steps) {
+    if (step.groupId != groupId)
+      continue;
+    info.name = step.groupName;
+    info.when = step.groupWhen;
+    info.fade = step.groupFade;
+    info.fadeMs = step.groupFadeMs;
+    found = true;
+    break;
+  }
+  if (!found)
+    return;
+
+  if (!groupOptionsDialog(info, false))
+    return;
+
+  for (SuiteStep &step : suite->steps) {
+    if (step.groupId == groupId) {
+      step.groupName = info.name;
+      step.groupWhen = info.when;
+      step.groupFade = info.fade;
+      step.groupFadeMs = info.fadeMs;
+    }
+    // As condições que apontam para o grupo mostram o nome novo.
+    if (step.conditionGroupId == groupId)
+      step.conditionGroupName = info.name;
+  }
+  ensureSuiteRunsFor(suite, info.when);
+  persistSelectedSuite();
+}
+
+void SuiteDock::setGroupWhen(const QString &groupId, SuiteGroupWhen when)
+{
+  Suite *suite = selectedSuite();
+  if (!suite || groupId.isEmpty())
+    return;
+  bool touched = false;
+  for (SuiteStep &step : suite->steps) {
+    if (step.groupId != groupId)
+      continue;
+    step.groupWhen = when;
+    touched = true;
+  }
+  if (!touched)
+    return;
+  ensureSuiteRunsFor(suite, when);
+  persistSelectedSuite();
+}
+
+void SuiteDock::ensureSuiteRunsFor(Suite *suite, SuiteGroupWhen when)
+{
+  if (!suite)
+    return;
+  // Um grupo preso a um momento da gravação só roda se a suíte for chamada
+  // naquele momento. Sem isso, o grupo nunca aconteceria.
+  if (when == SuiteGroupWhen::RecordingStarted && !suite->runOnRecordingStart) {
+    suite->runOnRecordingStart = true;
+    QMessageBox::information(
+        this, tr("Rodar ao iniciar a gravação"),
+        tr("Liguei \"Rodar ao iniciar a gravação\" nesta suíte, senão este "
+           "grupo nunca aconteceria."));
+  }
+  if (when == SuiteGroupWhen::RecordingStopped && !suite->runOnRecordingStop) {
+    suite->runOnRecordingStop = true;
+    QMessageBox::information(
+        this, tr("Rodar ao encerrar a gravação"),
+        tr("Liguei \"Rodar ao encerrar a gravação\" nesta suíte, senão este "
+           "grupo nunca aconteceria."));
+  }
+}
+
 void SuiteDock::onMergeSteps()
 {
   Suite *suite = selectedSuite();
@@ -1409,14 +1838,10 @@ void SuiteDock::onMergeSteps()
     return;
   }
 
-  bool ok = false;
-  const QString name = QInputDialog::getText(
-      this, tr("Mesclar passos"),
-      tr("Nome do grupo (só para você se organizar):"), QLineEdit::Normal,
-      tr("Ações da gravação"), &ok);
-  if (!ok)
+  SuiteGroupInfo info;
+  info.name = tr("Ações da gravação");
+  if (!groupOptionsDialog(info, true))
     return;
-
   QVector<SuiteStep> picked;
   picked.reserve(indices.size());
   for (int index : indices) {
@@ -1429,8 +1854,12 @@ void SuiteDock::onMergeSteps()
   const QString groupId = QUuid::createUuid().toString(QUuid::WithoutBraces);
   for (SuiteStep &step : picked) {
     step.groupId = groupId;
-    step.groupName = name.trimmed();
+    step.groupName = info.name;
+    step.groupWhen = info.when;
+    step.groupFade = info.fade;
+    step.groupFadeMs = info.fadeMs;
   }
+  ensureSuiteRunsFor(suite, info.when);
 
   // Tira os passos escolhidos de onde estavam e coloca todos juntos, na
   // posicao do primeiro deles.
@@ -1480,7 +1909,9 @@ void SuiteDock::onUnmergeSteps()
       firstIndex = i;
     suite->steps[i].groupId.clear();
     suite->steps[i].groupName.clear();
+    suite->steps[i].groupWhen = SuiteGroupWhen::Always;
   }
+  releaseConditionTargets(suite, groupId);
   persistSelectedSuite();
   if (firstIndex >= 0)
     selectStepRowByIndex(firstIndex);
@@ -1512,10 +1943,32 @@ void SuiteDock::onStepContextMenu(const QPoint &pos)
   unmerge->setEnabled(inGroup);
   connect(unmerge, &QAction::triggered, this, &SuiteDock::onUnmergeSteps);
 
+  if (onHeader) {
+    const QString groupId = currentRowGroupId();
+    SuiteGroupWhen currentWhen = SuiteGroupWhen::Always;
+    for (const SuiteStep &step : suite->steps) {
+      if (step.groupId == groupId) {
+        currentWhen = step.groupWhen;
+        break;
+      }
+    }
+
+    QMenu *whenMenu = menu.addMenu(tr("Este grupo roda"));
+    for (const SuiteGroupWhen option :
+         {SuiteGroupWhen::Always, SuiteGroupWhen::RecordingStarted,
+          SuiteGroupWhen::RecordingStopped, SuiteGroupWhen::Manual}) {
+      QAction *action = whenMenu->addAction(suiteGroupWhenOption(option));
+      action->setCheckable(true);
+      action->setChecked(option == currentWhen);
+      connect(action, &QAction::triggered, this,
+              [this, groupId, option]() { setGroupWhen(groupId, option); });
+    }
+  }
+
   menu.addSeparator();
 
-  QAction *edit =
-      menu.addAction(onHeader ? tr("Renomear grupo...") : tr("Editar passo..."));
+  QAction *edit = menu.addAction(onHeader ? tr("Opções do grupo...")
+                                          : tr("Editar passo..."));
   edit->setEnabled(index >= 0 || onHeader);
   connect(edit, &QAction::triggered, this, &SuiteDock::onEditStep);
 
@@ -1541,9 +1994,149 @@ void SuiteDock::onRunNow()
 {
   if (!m_engine)
     return;
+
   const QString id = selectedSuiteId();
+  SuiteTrigger trigger = SuiteTrigger::Manual;
+
+  // Se a suíte tem grupos presos ao início ou ao fim da gravação, o teste
+  // pergunta qual momento simular, senão eles não rodariam no teste.
+  const Suite *suite = m_store ? (id.isEmpty() ? m_store->activeSuite()
+                                               : m_store->suiteById(id))
+                               : nullptr;
+  bool hasStart = false;
+  bool hasStop = false;
+  if (suite) {
+    for (const SuiteStep &step : suite->steps) {
+      if (step.groupId.isEmpty())
+        continue;
+      if (step.groupWhen == SuiteGroupWhen::RecordingStarted)
+        hasStart = true;
+      else if (step.groupWhen == SuiteGroupWhen::RecordingStopped)
+        hasStop = true;
+    }
+  }
+
+  if (hasStart || hasStop) {
+    QStringList options;
+    QVector<SuiteTrigger> values;
+    if (hasStart) {
+      options << tr("Como se a gravação tivesse começado");
+      values << SuiteTrigger::RecordingStarted;
+    }
+    if (hasStop) {
+      options << tr("Como se a gravação tivesse terminado");
+      values << SuiteTrigger::RecordingStopped;
+    }
+    options << tr("Como o atalho (só os grupos sem momento fixo)");
+    values << SuiteTrigger::Manual;
+
+    bool ok = false;
+    const QString choice = QInputDialog::getItem(
+        this, tr("Testar agora"),
+        tr("Esta suíte tem grupos com momento fixo. O que você quer simular?"),
+        options, 0, false, &ok);
+    if (!ok)
+      return;
+    const int chosen = options.indexOf(choice);
+    if (chosen >= 0)
+      trigger = values.at(chosen);
+  }
+
   if (id.isEmpty())
-    m_engine->runActiveNow();
+    m_engine->runActiveNow(trigger);
   else
-    m_engine->runSuiteById(id);
+    m_engine->runSuiteById(id, trigger);
+}
+
+void SuiteDock::onStopWithOutro()
+{
+  if (!m_engine)
+    return;
+
+  if (!SuiteActions::isRecording()) {
+    QMessageBox::information(
+        this, tr("Encerrar gravação com transição"),
+        tr("Não há gravação em andamento agora."));
+    return;
+  }
+
+  const Suite *suite = m_store ? m_store->activeSuite() : nullptr;
+  if (!suite || !suite->runOnRecordingStop || suite->steps.isEmpty()) {
+    const auto answer = QMessageBox::question(
+        this, tr("Encerrar gravação com transição"),
+        tr("A suíte ativa não tem nada marcado para rodar ao encerrar a "
+           "gravação, então não há transição para esperar. Encerrar a gravação "
+           "agora mesmo?"),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (answer != QMessageBox::Yes)
+      return;
+  }
+
+  m_engine->stopRecordingWithOutro();
+}
+
+void SuiteDock::onOutroHotkeySetup()
+{
+  const QString obsKey = SuiteOutroHotkey::obsStopKeyText();
+  const QString ourKey = SuiteOutroHotkey::outroKeyText();
+
+  QString state;
+  if (!ourKey.isEmpty()) {
+    state = tr("Agora a tecla <b>%1</b> roda o encerramento suave: ela executa "
+               "os grupos marcados para o fim, espera as transições e só então "
+               "encerra a gravação.")
+                .arg(ourKey);
+    if (!obsKey.isEmpty()) {
+      state += tr("<br><br>A tecla <b>%1</b> continua no \"Parar gravação\" do "
+                  "OBS, que encerra o arquivo na hora, sem esperar o "
+                  "escurecer.")
+                   .arg(obsKey);
+    }
+  } else if (!obsKey.isEmpty()) {
+    state = tr("Hoje a tecla <b>%1</b> está no \"Parar gravação\" do OBS, que "
+               "fecha o arquivo imediatamente — por isso o escurecer do fim "
+               "não entra no vídeo.<br><br>Se você passar essa tecla para o "
+               "encerramento suave, ela continua sendo a sua tecla de parar, "
+               "mas o vídeo só termina depois que a transição acabar.")
+                .arg(obsKey);
+  } else {
+    state = tr("Não há tecla no \"Parar gravação\" do OBS nem no encerramento "
+               "suave. Defina uma tecla em Configurações → Atalhos.");
+  }
+
+  QMessageBox box(this);
+  box.setWindowTitle(tr("Atalho para encerrar a gravação"));
+  box.setTextFormat(Qt::RichText);
+  box.setText(state);
+  QPushButton *takeBtn = box.addButton(tr("Usar essa tecla no encerramento suave"),
+                                       QMessageBox::AcceptRole);
+  QPushButton *giveBtn = box.addButton(tr("Devolver a tecla ao OBS"),
+                                       QMessageBox::DestructiveRole);
+  box.addButton(tr("Fechar"), QMessageBox::RejectRole);
+  takeBtn->setEnabled(!obsKey.isEmpty());
+  giveBtn->setEnabled(!ourKey.isEmpty());
+  box.exec();
+
+  QString message;
+  if (box.clickedButton() == takeBtn) {
+    if (SuiteOutroHotkey::takeOverStopKey(&message)) {
+      QMessageBox::information(
+          this, tr("Atalho para encerrar a gravação"),
+          tr("Pronto: a tecla %1 agora encerra a gravação com transição. O "
+             "\"Parar gravação\" do OBS ficou sem tecla, e o botão de parar da "
+             "interface continua encerrando na hora.")
+              .arg(message));
+    } else {
+      QMessageBox::warning(this, tr("Atalho para encerrar a gravação"), message);
+    }
+  } else if (box.clickedButton() == giveBtn) {
+    if (SuiteOutroHotkey::giveBackStopKey(&message)) {
+      QMessageBox::information(
+          this, tr("Atalho para encerrar a gravação"),
+          tr("A tecla %1 voltou para o \"Parar gravação\" do OBS.")
+              .arg(message));
+    } else {
+      QMessageBox::warning(this, tr("Atalho para encerrar a gravação"), message);
+    }
+  }
 }

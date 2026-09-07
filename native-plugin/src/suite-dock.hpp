@@ -45,7 +45,11 @@ private slots:
   void onUnmergeSteps();
   void onStepContextMenu(const QPoint &pos);
   void onOpenFolderToggled(bool checked);
+  void onRunOnStartToggled(bool checked);
+  void onRunOnStopToggled(bool checked);
   void onRunNow();
+  void onStopWithOutro();
+  void onOutroHotkeySetup();
 
 private:
   QString selectedSuiteId() const;
@@ -55,6 +59,12 @@ private:
   void selectSuiteById(const QString &id);
   void updateButtonStates();
   bool editStepDialog(SuiteStep &step, bool isNew);
+  // Nome do grupo e momento em que ele roda.
+  bool groupOptionsDialog(SuiteGroupInfo &info, bool isNew);
+  void editGroup(const QString &groupId);
+  void setGroupWhen(const QString &groupId, SuiteGroupWhen when);
+  // Garante que a suite seja chamada no momento que o grupo espera.
+  void ensureSuiteRunsFor(Suite *suite, SuiteGroupWhen when);
 
   // Linha atual da lista de passos: indice do passo, ou -1 num cabecalho
   // de grupo.
@@ -64,6 +74,8 @@ private:
   // Indices dos passos marcados, em ordem crescente.
   QList<int> markedStepIndices() const;
   void selectStepRowByIndex(int stepIndex);
+  // Solta as condicoes que apontavam para um grupo que deixou de existir.
+  void releaseConditionTargets(Suite *suite, const QString &groupId);
 
   SuiteStore *m_store = nullptr;
   SuiteEngine *m_engine = nullptr;
@@ -71,6 +83,8 @@ private:
   QListWidget *m_suiteList = nullptr;
   QListWidget *m_stepList = nullptr;
   QCheckBox *m_openFolderCheck = nullptr;
+  QCheckBox *m_runOnStartCheck = nullptr;
+  QCheckBox *m_runOnStopCheck = nullptr;
   QLabel *m_activeLabel = nullptr;
 
   QPushButton *m_renameBtn = nullptr;
@@ -88,6 +102,8 @@ private:
   QPushButton *m_mergeStepsBtn = nullptr;
   QPushButton *m_unmergeStepsBtn = nullptr;
   QPushButton *m_runBtn = nullptr;
+  QPushButton *m_stopWithOutroBtn = nullptr;
+  QPushButton *m_outroKeyBtn = nullptr;
 
   bool m_updating = false;
 };

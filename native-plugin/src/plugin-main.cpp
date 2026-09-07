@@ -1,6 +1,7 @@
 #include "recording-timer-overlay.hpp"
 #include "suite-dock.hpp"
 #include "suite-engine.hpp"
+#include "suite-outro-hotkey.hpp"
 #include "suite-store.hpp"
 
 #include <obs-frontend-api.h>
@@ -16,8 +17,10 @@
 #include <QJsonObject>
 #include <QMainWindow>
 #include <QSet>
+#include <QStringList>
 #include <QTimer>
 
+#include <cstring>
 #include <functional>
 
 OBS_DECLARE_MODULE()
@@ -37,12 +40,15 @@ obs_hotkey_id hotkey_down = OBS_INVALID_HOTKEY_ID;
 obs_hotkey_id hotkey_left = OBS_INVALID_HOTKEY_ID;
 obs_hotkey_id hotkey_right = OBS_INVALID_HOTKEY_ID;
 obs_hotkey_id hotkey_run_suite = OBS_INVALID_HOTKEY_ID;
+obs_hotkey_id hotkey_stop_with_outro = OBS_INVALID_HOTKEY_ID;
 
 constexpr const char *kHotkeyNameUp = "obs-overlay-time-show.move_up";
 constexpr const char *kHotkeyNameDown = "obs-overlay-time-show.move_down";
 constexpr const char *kHotkeyNameLeft = "obs-overlay-time-show.move_left";
 constexpr const char *kHotkeyNameRight = "obs-overlay-time-show.move_right";
 constexpr const char *kHotkeyNameRunSuite = "obs-overlay-time-show.run_active_suite";
+constexpr const char *kHotkeyNameStopWithOutro =
+    "obs-overlay-time-show.stop_recording_with_outro";
 constexpr const char *kDockId = "OBSOverlayTimeShowSuites";
 
 void sync_overlay_state();
@@ -210,6 +216,14 @@ void hotkey_run_active_suite(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed
   runOnEngine([](SuiteEngine *engine) { engine->runActiveNow(); });
 }
 
+void hotkey_stop_recording_with_outro(void *, obs_hotkey_id, obs_hotkey_t *,
+                                      bool pressed)
+{
+  if (!pressed)
+    return;
+  runOnEngine([](SuiteEngine *engine) { engine->stopRecordingWithOutro(); });
+}
+
 obs_hotkey_id register_one_hotkey(const char *id, const char *lookup_key,
                                   obs_hotkey_func callback)
 {
@@ -257,6 +271,114 @@ void save_hotkey_bindings(obs_hotkey_id id, const char *name)
     config_set_string(config, "Hotkeys", name, json);
   obs_data_release(data);
   obs_data_array_release(bindings);
+}
+
+// ---- Emprestimo da tecla de parar gravacao ----------------------------
+// O "Parar gravacao" do OBS fecha o arquivo na hora. Para o escurecer entrar
+// no video, a mesma tecla pode ficar com o encerramento suave do plugin.
+
+constexpr const char *kObsStopRecordingHotkey = "OBSBasic.StopRecording";
+
+struct HotkeyLookup {
+  const char *name = nullptr;
+  obs_hotkey_id id = OBS_INVALID_HOTKEY_ID;
+};
+
+bool lookup_hotkey_cb(void *data, obs_hotkey_id id, obs_hotkey_t *key)
+{
+  auto *lookup = static_cast<HotkeyLookup *>(data);
+  const char *name = obs_hotkey_get_name(key);
+  if (name && lookup->name && strcmp(name, lookup->name) == 0) {
+    lookup->id = id;
+    return false;
+  }
+  return true;
+}
+
+obs_hotkey_id find_hotkey_by_name(const char *name)
+{
+  HotkeyLookup lookup;
+  lookup.name = name;
+  obs_enum_hotkeys(lookup_hotkey_cb, &lookup);
+  return lookup.id;
+}
+
+QString describe_bindings(obs_data_array_t *bindings)
+{
+  if (!bindings)
+    return QString();
+  QStringList combos;
+  const size_t count = obs_data_array_count(bindings);
+  for (size_t i = 0; i < count; ++i) {
+    obs_data_t *item = obs_data_array_item(bindings, i);
+    if (!item)
+      continue;
+    QStringList parts;
+    if (obs_data_get_bool(item, "control"))
+      parts << QStringLiteral("Ctrl");
+    if (obs_data_get_bool(item, "alt"))
+      parts << QStringLiteral("Alt");
+    if (obs_data_get_bool(item, "shift"))
+      parts << QStringLiteral("Shift");
+    if (obs_data_get_bool(item, "command"))
+      parts << QStringLiteral("Win");
+    QString key = QString::fromUtf8(obs_data_get_string(item, "key"));
+    if (key.startsWith(QLatin1String("OBS_KEY_")))
+      key = key.mid(8);
+    if (!key.isEmpty())
+      parts << key;
+    if (!parts.isEmpty())
+      combos << parts.join(QStringLiteral(" + "));
+    obs_data_release(item);
+  }
+  return combos.join(QStringLiteral(", "));
+}
+
+int count_bindings(obs_hotkey_id id)
+{
+  if (id == OBS_INVALID_HOTKEY_ID)
+    return 0;
+  obs_data_array_t *bindings = obs_hotkey_save(id);
+  const int count = bindings ? static_cast<int>(obs_data_array_count(bindings))
+                             : 0;
+  obs_data_array_release(bindings);
+  return count;
+}
+
+QString describe_hotkey(obs_hotkey_id id)
+{
+  if (id == OBS_INVALID_HOTKEY_ID)
+    return QString();
+  obs_data_array_t *bindings = obs_hotkey_save(id);
+  const QString text = describe_bindings(bindings);
+  obs_data_array_release(bindings);
+  return text;
+}
+
+// Grava o atalho do OBS no perfil, para a mudanca sobreviver ao fechar.
+void write_obs_hotkey_config(obs_hotkey_id id)
+{
+  config_t *config = obs_frontend_get_profile_config();
+  if (!config || id == OBS_INVALID_HOTKEY_ID)
+    return;
+  obs_data_array_t *bindings = obs_hotkey_save(id);
+  obs_data_t *data = obs_data_create();
+  obs_data_set_array(data, "bindings", bindings);
+  const char *json = obs_data_get_json(data);
+  if (json)
+    config_set_string(config, "Hotkeys", kObsStopRecordingHotkey, json);
+  obs_data_release(data);
+  obs_data_array_release(bindings);
+  config_save(config);
+}
+
+void clear_hotkey(obs_hotkey_id id)
+{
+  if (id == OBS_INVALID_HOTKEY_ID)
+    return;
+  obs_data_array_t *empty = obs_data_array_create();
+  obs_hotkey_load(id, empty);
+  obs_data_array_release(empty);
 }
 
 // ---- Atalho proprio para cada suite -----------------------------------
@@ -352,6 +474,7 @@ void load_all_hotkey_bindings()
   load_hotkey_bindings(hotkey_left, kHotkeyNameLeft);
   load_hotkey_bindings(hotkey_right, kHotkeyNameRight);
   load_hotkey_bindings(hotkey_run_suite, kHotkeyNameRunSuite);
+  load_hotkey_bindings(hotkey_stop_with_outro, kHotkeyNameStopWithOutro);
   for (auto it = suite_hotkeys.constBegin(); it != suite_hotkeys.constEnd();
        ++it) {
     load_hotkey_bindings(it.value(),
@@ -366,6 +489,7 @@ void save_all_hotkey_bindings()
   save_hotkey_bindings(hotkey_left, kHotkeyNameLeft);
   save_hotkey_bindings(hotkey_right, kHotkeyNameRight);
   save_hotkey_bindings(hotkey_run_suite, kHotkeyNameRunSuite);
+  save_hotkey_bindings(hotkey_stop_with_outro, kHotkeyNameStopWithOutro);
   for (auto it = suite_hotkeys.constBegin(); it != suite_hotkeys.constEnd();
        ++it) {
     save_hotkey_bindings(it.value(),
@@ -432,6 +556,10 @@ void register_hotkeys()
   hotkey_run_suite = register_one_hotkey(
       kHotkeyNameRunSuite, "OBSOverlayTimeShow.Hotkey.RunActiveSuite",
       hotkey_run_active_suite);
+  hotkey_stop_with_outro = register_one_hotkey(
+      kHotkeyNameStopWithOutro,
+      "OBSOverlayTimeShow.Hotkey.StopRecordingWithOutro",
+      hotkey_stop_recording_with_outro);
 }
 
 void unregister_hotkeys()
@@ -447,6 +575,7 @@ void unregister_hotkeys()
   clear(hotkey_left);
   clear(hotkey_right);
   clear(hotkey_run_suite);
+  clear(hotkey_stop_with_outro);
 
   const QList<QString> suiteIds = suite_hotkeys.keys();
   for (const QString &suiteId : suiteIds)
@@ -507,6 +636,92 @@ void sync_overlay_state()
   }
 }
 } // namespace
+
+namespace SuiteOutroHotkey {
+
+QString obsStopKeyText()
+{
+  return describe_hotkey(find_hotkey_by_name(kObsStopRecordingHotkey));
+}
+
+QString outroKeyText()
+{
+  return describe_hotkey(hotkey_stop_with_outro);
+}
+
+bool takeOverStopKey(QString *message)
+{
+  const obs_hotkey_id stopId = find_hotkey_by_name(kObsStopRecordingHotkey);
+  if (stopId == OBS_INVALID_HOTKEY_ID) {
+    if (message)
+      *message = QObject::tr("Não encontrei o atalho \"Parar gravação\" do OBS.");
+    return false;
+  }
+
+  obs_data_array_t *bindings = obs_hotkey_save(stopId);
+  const int count = bindings ? static_cast<int>(obs_data_array_count(bindings))
+                             : 0;
+  if (count == 0) {
+    obs_data_array_release(bindings);
+    if (message) {
+      *message = QObject::tr(
+          "O atalho \"Parar gravação\" do OBS está sem tecla. Defina uma tecla "
+          "nele em Configurações → Atalhos e tente de novo.");
+    }
+    return false;
+  }
+
+  const QString text = describe_bindings(bindings);
+  obs_hotkey_load(hotkey_stop_with_outro, bindings);
+  obs_data_array_release(bindings);
+
+  clear_hotkey(stopId);
+  save_hotkey_bindings(hotkey_stop_with_outro, kHotkeyNameStopWithOutro);
+  write_obs_hotkey_config(stopId);
+
+  blog(LOG_INFO,
+       "[obs-overlay-time-show] tecla de parar gravacao agora aciona o "
+       "encerramento suave: %s",
+       text.toUtf8().constData());
+  if (message)
+    *message = text;
+  return true;
+}
+
+bool giveBackStopKey(QString *message)
+{
+  const obs_hotkey_id stopId = find_hotkey_by_name(kObsStopRecordingHotkey);
+  if (stopId == OBS_INVALID_HOTKEY_ID) {
+    if (message)
+      *message = QObject::tr("Não encontrei o atalho \"Parar gravação\" do OBS.");
+    return false;
+  }
+  if (count_bindings(hotkey_stop_with_outro) == 0) {
+    if (message) {
+      *message = QObject::tr(
+          "O encerramento suave está sem tecla, então não há o que devolver.");
+    }
+    return false;
+  }
+
+  obs_data_array_t *bindings = obs_hotkey_save(hotkey_stop_with_outro);
+  const QString text = describe_bindings(bindings);
+  obs_hotkey_load(stopId, bindings);
+  obs_data_array_release(bindings);
+
+  clear_hotkey(hotkey_stop_with_outro);
+  save_hotkey_bindings(hotkey_stop_with_outro, kHotkeyNameStopWithOutro);
+  write_obs_hotkey_config(stopId);
+
+  blog(LOG_INFO,
+       "[obs-overlay-time-show] tecla %s devolvida ao parar gravacao do OBS",
+       text.toUtf8().constData());
+  if (message)
+    *message = text;
+  return true;
+}
+
+} // namespace SuiteOutroHotkey
 
 MODULE_EXPORT const char *obs_module_description(void)
 {

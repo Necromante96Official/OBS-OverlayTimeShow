@@ -178,6 +178,8 @@ Suite SuiteStore::mergeSuites(const QStringList &ids, const QString &name,
 {
   QVector<SuiteStep> steps;
   bool openFolder = false;
+  bool onStart = false;
+  bool onStop = false;
   int found = 0;
 
   for (const QString &id : ids) {
@@ -186,6 +188,8 @@ Suite SuiteStore::mergeSuites(const QStringList &ids, const QString &name,
       continue;
     ++found;
     openFolder = openFolder || suite->openRecordingFolderOnStop;
+    onStart = onStart || suite->runOnRecordingStart;
+    onStop = onStop || suite->runOnRecordingStop;
     steps.append(suite->steps);
   }
 
@@ -197,6 +201,8 @@ Suite SuiteStore::mergeSuites(const QStringList &ids, const QString &name,
   merged.name = name.trimmed().isEmpty() ? suggestedMergeName(ids)
                                          : name.trimmed();
   merged.openRecordingFolderOnStop = openFolder;
+  merged.runOnRecordingStart = onStart;
+  merged.runOnRecordingStop = onStop;
   merged.steps = steps;
   m_suites.append(merged);
 

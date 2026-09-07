@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QUrl>
 
+#include <cstring>
 #include <string>
 
 #ifdef _WIN32
@@ -97,6 +98,20 @@ QStringList audioSourceNames()
   return names;
 }
 
+QVector<QPair<QString, QString>> itemTransitionTypes()
+{
+  QVector<QPair<QString, QString>> types;
+  const char *id = nullptr;
+  for (size_t i = 0; obs_enum_transition_types(i, &id); ++i) {
+    if (!id)
+      continue;
+    const char *label = obs_source_get_display_name(id);
+    types.append({QString::fromUtf8(id),
+                  QString::fromUtf8(label ? label : id)});
+  }
+  return types;
+}
+
 bool sourceHasAudio(const QString &sourceName)
 {
   obs_source_t *source = findSourceByName(sourceName);
@@ -117,9 +132,62 @@ bool setScene(const QString &sceneName)
   return true;
 }
 
-bool setSourceVisible(const QString &sceneName, const QString &sourceName,
-                      bool visible)
+bool applyItemTransition(const QString &sceneName, const QString &sourceName,
+                         bool show, const QString &transitionId,
+                         int transitionMs)
 {
+  if (transitionId.isEmpty())
+    return true;
+
+  obs_source_t *sceneSource = findSourceByName(sceneName);
+  if (!sceneSource)
+    return false;
+  obs_scene_t *scene = obs_scene_from_source(sceneSource);
+  if (!scene) {
+    obs_source_release(sceneSource);
+    return false;
+  }
+  obs_sceneitem_t *item =
+      obs_scene_find_source(scene, sourceName.toUtf8().constData());
+  if (!item) {
+    obs_source_release(sceneSource);
+    return false;
+  }
+
+  // A transicao de mostrar/ocultar e a mesma que o OBS usa no olho da fonte.
+  if (transitionId == QLatin1String("none")) {
+    obs_sceneitem_set_transition(item, show, nullptr);
+  } else {
+    obs_source_t *existing = obs_sceneitem_get_transition(item, show);
+    const QString existingId =
+        existing ? QString::fromUtf8(obs_source_get_id(existing)) : QString();
+    if (existingId != transitionId) {
+      const QByteArray id = transitionId.toUtf8();
+      const char *label = obs_source_get_display_name(id.constData());
+      obs_source_t *created = obs_source_create_private(
+          id.constData(), label ? label : id.constData(), nullptr);
+      if (created) {
+        obs_sceneitem_set_transition(item, show, created);
+        obs_source_release(created);
+      }
+    }
+  }
+  if (transitionMs > 0) {
+    obs_sceneitem_set_transition_duration(item, show,
+                                          static_cast<uint32_t>(transitionMs));
+  }
+
+  obs_source_release(sceneSource);
+  return true;
+}
+
+bool setSourceVisible(const QString &sceneName, const QString &sourceName,
+                      bool visible, const QString &transitionId,
+                      int transitionMs)
+{
+  applyItemTransition(sceneName, sourceName, visible, transitionId,
+                      transitionMs);
+
   obs_source_t *sceneSource = findSourceByName(sceneName);
   if (!sceneSource)
     return false;
@@ -251,6 +319,146 @@ bool openRecordingFolder()
 #endif
 }
 
+namespace {
+
+constexpr const char *kBlackOverlayName = "Suítes: Tela Preta";
+
+// Descobre qual id de fonte de cor este OBS oferece.
+QByteArray colorSourceId()
+{
+  const char *candidates[] = {"color_source_v3", "color_source_v2",
+                              "color_source"};
+  const char *id = nullptr;
+  for (size_t i = 0; obs_enum_input_types(i, &id); ++i) {
+    if (!id)
+      continue;
+    for (const char *candidate : candidates) {
+      if (strcmp(id, candidate) == 0)
+        return QByteArray(candidate);
+    }
+  }
+  return QByteArray("color_source_v3");
+}
+
+// Garante que exista uma camada preta do tamanho da tela, no topo da cena.
+obs_sceneitem_t *ensureBlackOverlay(obs_scene_t *scene)
+{
+  if (!scene)
+    return nullptr;
+
+  obs_sceneitem_t *item = obs_scene_find_source(scene, kBlackOverlayName);
+  if (item) {
+    obs_sceneitem_set_order(item, OBS_ORDER_MOVE_TOP);
+    return item;
+  }
+
+  obs_video_info ovi = {};
+  if (!obs_get_video_info(&ovi)) {
+    ovi.base_width = 1920;
+    ovi.base_height = 1080;
+  }
+
+  obs_source_t *source = obs_get_source_by_name(kBlackOverlayName);
+  if (!source) {
+    obs_data_t *settings = obs_data_create();
+    // 0xFF000000 em ABGR: preto totalmente opaco.
+    obs_data_set_int(settings, "color", 0xFF000000);
+    obs_data_set_int(settings, "width", ovi.base_width);
+    obs_data_set_int(settings, "height", ovi.base_height);
+    source = obs_source_create(colorSourceId().constData(), kBlackOverlayName,
+                               settings, nullptr);
+    obs_data_release(settings);
+  }
+  if (!source)
+    return nullptr;
+
+  item = obs_scene_add(scene, source);
+  obs_source_release(source);
+  if (!item)
+    return nullptr;
+
+  obs_sceneitem_set_visible(item, false);
+  obs_sceneitem_set_order(item, OBS_ORDER_MOVE_TOP);
+  return item;
+}
+
+// Prepara a transicao de esmaecer da camada preta, no lado certo.
+void setOverlayFade(obs_sceneitem_t *item, bool show, int durationMs)
+{
+  obs_source_t *existing = obs_sceneitem_get_transition(item, show);
+  if (!existing ||
+      strcmp(obs_source_get_id(existing), "fade_transition") != 0) {
+    obs_source_t *fade = obs_source_create_private(
+        "fade_transition", "Suites Screen Fade", nullptr);
+    if (fade) {
+      obs_sceneitem_set_transition(item, show, fade);
+      obs_source_release(fade);
+    }
+  }
+  obs_sceneitem_set_transition_duration(item, show,
+                                        static_cast<uint32_t>(durationMs));
+}
+
+} // namespace
+
+bool screenFade(const QString &sceneName, bool fadeFromBlack, int durationMs)
+{
+  if (durationMs <= 0)
+    durationMs = 1;
+
+  obs_source_t *sceneSource = sceneName.trimmed().isEmpty()
+                                  ? obs_frontend_get_current_scene()
+                                  : findSourceByName(sceneName);
+  if (!sceneSource)
+    return false;
+  obs_scene_t *scene = obs_scene_from_source(sceneSource);
+  if (!scene) {
+    obs_source_release(sceneSource);
+    return false;
+  }
+
+  obs_sceneitem_t *item = ensureBlackOverlay(scene);
+  if (!item) {
+    obs_source_release(sceneSource);
+    return false;
+  }
+
+  if (fadeFromBlack) {
+    // A tela precisa estar preta antes de clarear. Se a camada nao estiver
+    // no ar (primeira gravacao, por exemplo), ela entra na hora, sem fade.
+    if (!obs_sceneitem_visible(item)) {
+      obs_sceneitem_set_transition(item, true, nullptr);
+      obs_sceneitem_set_visible(item, true);
+    }
+    setOverlayFade(item, false, durationMs);
+    obs_sceneitem_set_visible(item, false);
+  } else {
+    setOverlayFade(item, true, durationMs);
+    if (obs_sceneitem_visible(item)) {
+      // Ja esta preto: nada a escurecer.
+      obs_source_release(sceneSource);
+      return true;
+    }
+    obs_sceneitem_set_visible(item, true);
+  }
+
+  obs_source_release(sceneSource);
+  return true;
+}
+
+bool isRecording()
+{
+  return obs_frontend_recording_active();
+}
+
+bool stopRecording()
+{
+  if (!obs_frontend_recording_active())
+    return false;
+  obs_frontend_recording_stop();
+  return true;
+}
+
 bool isCurrentScene(const QString &sceneName)
 {
   obs_source_t *current = obs_frontend_get_current_scene();
@@ -340,18 +548,24 @@ bool executeStep(const SuiteStep &step, bool *skipNextOut, int *waitMsOut)
   case SuiteStepType::SetSourceVisible: {
     const bool withFade = step.fadeAudio && sourceHasAudio(step.source);
     if (!withFade)
-      return setSourceVisible(step.scene, step.source, step.visible);
+      return setSourceVisible(step.scene, step.source, step.visible,
+                              step.itemTransitionId, step.itemTransitionMs);
 
     if (waitForFade && waitMsOut)
       *waitMsOut = fadeMs;
 
     if (step.visible) {
       // Aparece em silencio e o audio sobe ate o volume escolhido.
-      const bool shown = setSourceVisible(step.scene, step.source, true);
+      const bool shown =
+          setSourceVisible(step.scene, step.source, true,
+                           step.itemTransitionId, step.itemTransitionMs);
       const bool faded = fadeInAudio(step.source, step.volume, fadeMs);
       return shown && faded;
     }
-    // O audio desce e a fonte so e ocultada quando o fade termina.
+    // O audio desce e a fonte so e ocultada quando o fade termina, ja com a
+    // transicao de ocultar preparada.
+    applyItemTransition(step.scene, step.source, false, step.itemTransitionId,
+                        step.itemTransitionMs);
     return fadeOutAudio(step.scene, step.source, fadeMs, true);
   }
   case SuiteStepType::DelayMs:
@@ -371,6 +585,14 @@ bool executeStep(const SuiteStep &step, bool *skipNextOut, int *waitMsOut)
       *waitMsOut = fadeMs;
     return step.fadeIn ? fadeInAudio(step.source, step.volume, fadeMs)
                        : fadeOutAudio(step.scene, step.source, fadeMs, false);
+  case SuiteStepType::ScreenFade: {
+    // O fade da tela e sempre esperado: e ele que define o tempo do inicio
+    // escuro e do encerramento no preto.
+    const int screenMs = qMax(1, step.screenFadeMs);
+    if (waitMsOut)
+      *waitMsOut = screenMs;
+    return screenFade(step.scene, step.fadeIn, screenMs);
+  }
   case SuiteStepType::IfCurrentScene:
     if (skipNextOut)
       *skipNextOut = !isCurrentScene(step.scene);
@@ -379,6 +601,9 @@ bool executeStep(const SuiteStep &step, bool *skipNextOut, int *waitMsOut)
     if (skipNextOut)
       *skipNextOut =
           !isSourceVisible(step.scene, step.source, step.visible);
+    return true;
+  case SuiteStepType::IfTrigger:
+    // Quem sabe qual foi o gatilho e o motor, entao ele resolve esse passo.
     return true;
   case SuiteStepType::RestartMedia:
     return restartMedia(step.source);
