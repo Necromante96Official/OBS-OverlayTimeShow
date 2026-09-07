@@ -1,4 +1,5 @@
 #include "suite-actions.hpp"
+#include "suite-fader.hpp"
 
 #include <obs-frontend-api.h>
 #include <obs-module.h>
@@ -94,6 +95,16 @@ QStringList audioSourceNames()
   };
   obs_enum_sources(enumCb, &names);
   return names;
+}
+
+bool sourceHasAudio(const QString &sourceName)
+{
+  obs_source_t *source = findSourceByName(sourceName);
+  if (!source)
+    return false;
+  const uint32_t flags = obs_source_get_output_flags(source);
+  obs_source_release(source);
+  return (flags & OBS_SOURCE_AUDIO) != 0;
 }
 
 bool setScene(const QString &sceneName)
@@ -269,18 +280,80 @@ bool isSourceVisible(const QString &sceneName, const QString &sourceName,
   return visible == expectVisible;
 }
 
-bool executeStep(const SuiteStep &step, bool *skipNextOut)
+namespace {
+
+// Sobe o audio do silencio ate o volume escolhido, tirando do mudo antes.
+bool fadeInAudio(const QString &sourceName, double targetVolume, int durationMs)
+{
+  SuiteFader::FadeRequest request;
+  request.sourceName = sourceName;
+  request.targetVolume = targetVolume;
+  request.startVolume = 0.0;
+  request.durationMs = durationMs;
+  request.unmuteAtStart = true;
+  return SuiteFader::startFade(request);
+}
+
+// Desce o audio ate o silencio. Quando hideItemAtEnd esta ligado, oculta a
+// fonte no fim e devolve o volume original, para o proximo fade in funcionar.
+bool fadeOutAudio(const QString &sceneName, const QString &sourceName,
+                  int durationMs, bool hideItemAtEnd)
+{
+  SuiteFader::FadeRequest request;
+  request.sceneName = sceneName;
+  request.sourceName = sourceName;
+  request.targetVolume = 0.0;
+  request.durationMs = durationMs;
+  request.hideItemWhenDone = hideItemAtEnd;
+  request.restoreVolumeWhenDone = hideItemAtEnd;
+  return SuiteFader::startFade(request);
+}
+
+// Desliza do volume atual ate o volume escolhido, sem mexer no mudo.
+bool fadeToVolume(const QString &sourceName, double targetVolume,
+                  int durationMs)
+{
+  SuiteFader::FadeRequest request;
+  request.sourceName = sourceName;
+  request.targetVolume = targetVolume;
+  request.durationMs = durationMs;
+  return SuiteFader::startFade(request);
+}
+
+} // namespace
+
+bool executeStep(const SuiteStep &step, bool *skipNextOut, int *waitMsOut)
 {
   if (skipNextOut)
     *skipNextOut = false;
+  if (waitMsOut)
+    *waitMsOut = 0;
+
+  const int fadeMs = qMax(0, step.fadeMs);
+  const bool waitForFade = step.waitForFade && fadeMs > 0;
 
   switch (step.type) {
   case SuiteStepType::SetScene:
     if (!step.transition.isEmpty() || step.transitionMs > 0)
       setTransition(step.transition, step.transitionMs);
     return setScene(step.scene);
-  case SuiteStepType::SetSourceVisible:
-    return setSourceVisible(step.scene, step.source, step.visible);
+  case SuiteStepType::SetSourceVisible: {
+    const bool withFade = step.fadeAudio && sourceHasAudio(step.source);
+    if (!withFade)
+      return setSourceVisible(step.scene, step.source, step.visible);
+
+    if (waitForFade && waitMsOut)
+      *waitMsOut = fadeMs;
+
+    if (step.visible) {
+      // Aparece em silencio e o audio sobe ate o volume escolhido.
+      const bool shown = setSourceVisible(step.scene, step.source, true);
+      const bool faded = fadeInAudio(step.source, step.volume, fadeMs);
+      return shown && faded;
+    }
+    // O audio desce e a fonte so e ocultada quando o fade termina.
+    return fadeOutAudio(step.scene, step.source, fadeMs, true);
+  }
   case SuiteStepType::DelayMs:
     return true;
   case SuiteStepType::SetTransition:
@@ -288,7 +361,16 @@ bool executeStep(const SuiteStep &step, bool *skipNextOut)
   case SuiteStepType::SetMute:
     return setMute(step.source, step.muted);
   case SuiteStepType::SetVolume:
-    return setVolume(step.source, step.volume);
+    if (!step.fadeAudio)
+      return setVolume(step.source, step.volume);
+    if (waitForFade && waitMsOut)
+      *waitMsOut = fadeMs;
+    return fadeToVolume(step.source, step.volume, fadeMs);
+  case SuiteStepType::AudioFade:
+    if (waitForFade && waitMsOut)
+      *waitMsOut = fadeMs;
+    return step.fadeIn ? fadeInAudio(step.source, step.volume, fadeMs)
+                       : fadeOutAudio(step.scene, step.source, fadeMs, false);
   case SuiteStepType::IfCurrentScene:
     if (skipNextOut)
       *skipNextOut = !isCurrentScene(step.scene);

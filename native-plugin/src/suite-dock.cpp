@@ -3,22 +3,25 @@
 
 #include <obs-module.h>
 
+#include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QFont>
 #include <QFormLayout>
+#include <QFrame>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
-#include <QLineEdit>
 #include <QVBoxLayout>
-#include <QAbstractItemView>
 
 namespace {
 
@@ -26,27 +29,83 @@ QString stepTypeLabel(SuiteStepType type)
 {
   switch (type) {
   case SuiteStepType::SetScene:
-    return QObject::tr("Trocar cena");
-  case SuiteStepType::SetSourceVisible:
-    return QObject::tr("Mostrar/ocultar fonte");
-  case SuiteStepType::DelayMs:
-    return QObject::tr("Esperar");
+    return QObject::tr("Trocar de cena");
   case SuiteStepType::SetTransition:
-    return QObject::tr("Definir transicao");
-  case SuiteStepType::SetMute:
-    return QObject::tr("Mute/unmute");
-  case SuiteStepType::SetVolume:
-    return QObject::tr("Volume");
-  case SuiteStepType::IfCurrentScene:
-    return QObject::tr("Se cena atual");
-  case SuiteStepType::IfSourceVisible:
-    return QObject::tr("Se fonte visivel");
+    return QObject::tr("Definir a transição padrão");
+  case SuiteStepType::SetSourceVisible:
+    return QObject::tr("Mostrar ou ocultar uma fonte");
   case SuiteStepType::RestartMedia:
-    return QObject::tr("Reiniciar midia");
+    return QObject::tr("Reiniciar uma mídia");
+  case SuiteStepType::SetMute:
+    return QObject::tr("Silenciar ou reativar um áudio");
+  case SuiteStepType::SetVolume:
+    return QObject::tr("Ajustar o volume de um áudio");
+  case SuiteStepType::AudioFade:
+    return QObject::tr("Transição de áudio (fade in / fade out)");
+  case SuiteStepType::DelayMs:
+    return QObject::tr("Esperar um tempo");
+  case SuiteStepType::IfCurrentScene:
+    return QObject::tr("Condição: a cena atual é...");
+  case SuiteStepType::IfSourceVisible:
+    return QObject::tr("Condição: a fonte está visível ou oculta");
   case SuiteStepType::OpenUrl:
-    return QObject::tr("Abrir URL/programa");
+    return QObject::tr("Abrir um programa, pasta ou site");
   }
   return QObject::tr("Passo");
+}
+
+QString stepTypeHelp(SuiteStepType type)
+{
+  switch (type) {
+  case SuiteStepType::SetScene:
+    return QObject::tr(
+        "Muda o programa para a cena escolhida. Se você informar uma transição, "
+        "ela é aplicada antes da troca.");
+  case SuiteStepType::SetTransition:
+    return QObject::tr(
+        "Define qual transição o OBS vai usar nas próximas trocas de cena, sem "
+        "trocar de cena agora.");
+  case SuiteStepType::SetSourceVisible:
+    return QObject::tr(
+        "Liga (visível) ou desliga (oculta) o olho de uma fonte dentro da cena "
+        "escolhida. Se a fonte tiver áudio, você pode pedir fade: ao mostrar, o "
+        "som sobe do silêncio; ao ocultar, o som desce antes de a fonte "
+        "desaparecer.");
+  case SuiteStepType::RestartMedia:
+    return QObject::tr(
+        "Faz um vídeo, áudio ou música voltar ao começo e tocar de novo.");
+  case SuiteStepType::SetMute:
+    return QObject::tr(
+        "Deixa a fonte de áudio no mudo ou tira do mudo no mixer de áudio.");
+  case SuiteStepType::SetVolume:
+    return QObject::tr(
+        "Define o volume da fonte de áudio: 0% é sem som e 100% é o volume "
+        "cheio. Você pode fazer a mudança na hora ou deslizando aos poucos "
+        "(fade).");
+  case SuiteStepType::AudioFade:
+    return QObject::tr(
+        "Sobe o áudio do silêncio até o volume escolhido (fade in) ou desce "
+        "até o silêncio (fade out), sem cortes bruscos. Vale para qualquer "
+        "fonte que tenha áudio: microfone, jogo, música, vídeo.");
+  case SuiteStepType::DelayMs:
+    return QObject::tr(
+        "Faz uma pausa antes de executar o próximo passo. Use para dar tempo à "
+        "transição ou ao jogo abrir.");
+  case SuiteStepType::IfCurrentScene:
+    return QObject::tr(
+        "Verifica se a cena que está no ar é a escolhida. Se não for, o passo "
+        "logo abaixo desta condição é ignorado.");
+  case SuiteStepType::IfSourceVisible:
+    return QObject::tr(
+        "Verifica se a fonte está visível (ou oculta, se você escolher assim). "
+        "Se a verificação falhar, o passo logo abaixo desta condição é "
+        "ignorado.");
+  case SuiteStepType::OpenUrl:
+    return QObject::tr(
+        "Abre um site, uma pasta do Windows ou um programa. Exemplos: "
+        "https://seusite.com ou D:\\Videos.");
+  }
+  return QString();
 }
 
 } // namespace
@@ -55,76 +114,149 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
     : QWidget(parent), m_store(store), m_engine(engine)
 {
   auto *root = new QVBoxLayout(this);
-  root->setContentsMargins(8, 8, 8, 8);
-  root->setSpacing(8);
+  root->setContentsMargins(10, 10, 10, 10);
+  root->setSpacing(10);
 
   m_activeLabel = new QLabel(this);
+  QFont activeFont = m_activeLabel->font();
+  activeFont.setBold(true);
+  m_activeLabel->setFont(activeFont);
+  m_activeLabel->setWordWrap(true);
   root->addWidget(m_activeLabel);
 
+  auto *suitesGroup = new QGroupBox(tr("Suítes (uma configuração por jogo)"), this);
+  auto *suitesLayout = new QVBoxLayout(suitesGroup);
+  suitesLayout->setSpacing(6);
+
+  auto *suitesHint = new QLabel(
+      tr("Só uma suíte fica ativa por vez. A suíte ativa é a que roda quando a "
+         "gravação começa."),
+      suitesGroup);
+  suitesHint->setWordWrap(true);
+  suitesHint->setEnabled(false);
+  suitesLayout->addWidget(suitesHint);
+
   auto *suiteRow = new QHBoxLayout();
-  m_suiteList = new QListWidget(this);
+  suiteRow->setSpacing(6);
+  m_suiteList = new QListWidget(suitesGroup);
   m_suiteList->setSelectionMode(QAbstractItemView::SingleSelection);
+  m_suiteList->setToolTip(
+      tr("Clique duas vezes em uma suíte para ativá-la."));
   suiteRow->addWidget(m_suiteList, 1);
 
   auto *suiteButtons = new QVBoxLayout();
-  auto *addBtn = new QPushButton(tr("Nova"), this);
-  auto *renameBtn = new QPushButton(tr("Renomear"), this);
-  auto *dupBtn = new QPushButton(tr("Duplicar"), this);
-  auto *removeBtn = new QPushButton(tr("Excluir"), this);
-  auto *activateBtn = new QPushButton(tr("Ativar"), this);
-  auto *clearActiveBtn = new QPushButton(tr("Desativar"), this);
+  suiteButtons->setSpacing(4);
+  auto *addBtn = new QPushButton(tr("Nova suíte"), suitesGroup);
+  addBtn->setToolTip(tr("Cria uma suíte vazia para um jogo."));
+  m_renameBtn = new QPushButton(tr("Renomear"), suitesGroup);
+  m_renameBtn->setToolTip(tr("Muda o nome da suíte selecionada."));
+  m_duplicateBtn = new QPushButton(tr("Duplicar"), suitesGroup);
+  m_duplicateBtn->setToolTip(
+      tr("Cria uma cópia da suíte selecionada, com todos os passos."));
+  m_removeBtn = new QPushButton(tr("Excluir"), suitesGroup);
+  m_removeBtn->setToolTip(tr("Apaga a suíte selecionada."));
+  m_activateBtn = new QPushButton(tr("Ativar esta suíte"), suitesGroup);
+  m_activateBtn->setToolTip(
+      tr("Torna a suíte selecionada a única ativa."));
+  m_deactivateBtn = new QPushButton(tr("Desativar todas"), suitesGroup);
+  m_deactivateBtn->setToolTip(
+      tr("Nenhuma suíte roda ao iniciar a gravação."));
   suiteButtons->addWidget(addBtn);
-  suiteButtons->addWidget(renameBtn);
-  suiteButtons->addWidget(dupBtn);
-  suiteButtons->addWidget(removeBtn);
-  suiteButtons->addSpacing(8);
-  suiteButtons->addWidget(activateBtn);
-  suiteButtons->addWidget(clearActiveBtn);
+  suiteButtons->addWidget(m_renameBtn);
+  suiteButtons->addWidget(m_duplicateBtn);
+  suiteButtons->addWidget(m_removeBtn);
+  suiteButtons->addSpacing(10);
+  suiteButtons->addWidget(m_activateBtn);
+  suiteButtons->addWidget(m_deactivateBtn);
   suiteButtons->addStretch(1);
   suiteRow->addLayout(suiteButtons);
-  root->addLayout(suiteRow, 1);
+  suitesLayout->addLayout(suiteRow, 1);
+  root->addWidget(suitesGroup, 1);
 
-  m_openFolderCheck =
-      new QCheckBox(tr("Ao terminar, abrir pasta da gravacao"), this);
-  root->addWidget(m_openFolderCheck);
+  auto *optionsGroup = new QGroupBox(tr("Opções da suíte selecionada"), this);
+  auto *optionsLayout = new QVBoxLayout(optionsGroup);
+  m_openFolderCheck = new QCheckBox(
+      tr("Abrir a pasta da gravação quando a gravação terminar"), optionsGroup);
+  m_openFolderCheck->setToolTip(
+      tr("Ao parar a gravação, o Windows abre a pasta e seleciona o arquivo que "
+         "acabou de ser salvo."));
+  optionsLayout->addWidget(m_openFolderCheck);
+  root->addWidget(optionsGroup);
 
-  root->addWidget(new QLabel(tr("Passos (ao iniciar gravacao / atalho)"), this));
-  m_stepList = new QListWidget(this);
-  root->addWidget(m_stepList, 2);
+  auto *stepsGroup = new QGroupBox(tr("Passos da suíte selecionada"), this);
+  auto *stepsLayout = new QVBoxLayout(stepsGroup);
+  stepsLayout->setSpacing(6);
+
+  auto *stepsHint = new QLabel(
+      tr("Os passos rodam de cima para baixo quando a gravação começa ou quando "
+         "você usa o atalho de teclado."),
+      stepsGroup);
+  stepsHint->setWordWrap(true);
+  stepsHint->setEnabled(false);
+  stepsLayout->addWidget(stepsHint);
+
+  m_stepList = new QListWidget(stepsGroup);
+  m_stepList->setSelectionMode(QAbstractItemView::SingleSelection);
+  m_stepList->setAlternatingRowColors(true);
+  m_stepList->setToolTip(tr("Clique duas vezes em um passo para editá-lo."));
+  stepsLayout->addWidget(m_stepList, 1);
 
   auto *stepButtons = new QHBoxLayout();
-  auto *addStepBtn = new QPushButton(tr("Adicionar"), this);
-  auto *editStepBtn = new QPushButton(tr("Editar"), this);
-  auto *removeStepBtn = new QPushButton(tr("Remover"), this);
-  auto *upBtn = new QPushButton(tr("Subir"), this);
-  auto *downBtn = new QPushButton(tr("Descer"), this);
-  auto *runBtn = new QPushButton(tr("Executar agora"), this);
-  stepButtons->addWidget(addStepBtn);
-  stepButtons->addWidget(editStepBtn);
-  stepButtons->addWidget(removeStepBtn);
-  stepButtons->addWidget(upBtn);
-  stepButtons->addWidget(downBtn);
+  stepButtons->setSpacing(4);
+  m_addStepBtn = new QPushButton(tr("Adicionar passo"), stepsGroup);
+  m_addStepBtn->setToolTip(tr("Adiciona um passo no fim da lista."));
+  m_editStepBtn = new QPushButton(tr("Editar"), stepsGroup);
+  m_removeStepBtn = new QPushButton(tr("Remover"), stepsGroup);
+  m_upBtn = new QPushButton(tr("Mover para cima"), stepsGroup);
+  m_downBtn = new QPushButton(tr("Mover para baixo"), stepsGroup);
+  m_runBtn = new QPushButton(tr("Testar agora"), stepsGroup);
+  m_runBtn->setToolTip(
+      tr("Executa os passos da suíte ativa imediatamente, sem gravar."));
+  stepButtons->addWidget(m_addStepBtn);
+  stepButtons->addWidget(m_editStepBtn);
+  stepButtons->addWidget(m_removeStepBtn);
+  stepButtons->addWidget(m_upBtn);
+  stepButtons->addWidget(m_downBtn);
   stepButtons->addStretch(1);
-  stepButtons->addWidget(runBtn);
-  root->addLayout(stepButtons);
+  stepButtons->addWidget(m_runBtn);
+  stepsLayout->addLayout(stepButtons);
+  root->addWidget(stepsGroup, 2);
+
+  auto *footer = new QLabel(
+      tr("Atalho de teclado: Configurações → Atalhos → \"Suítes: executar a "
+         "suíte ativa\"."),
+      this);
+  footer->setWordWrap(true);
+  footer->setEnabled(false);
+  root->addWidget(footer);
 
   connect(m_store, &SuiteStore::changed, this, &SuiteDock::refresh);
   connect(m_suiteList, &QListWidget::itemSelectionChanged, this,
           &SuiteDock::onSelectionChanged);
+  connect(m_suiteList, &QListWidget::itemDoubleClicked, this,
+          [this](QListWidgetItem *) { onActivateSelected(); });
   connect(addBtn, &QPushButton::clicked, this, &SuiteDock::onAddSuite);
-  connect(renameBtn, &QPushButton::clicked, this, &SuiteDock::onRenameSuite);
-  connect(dupBtn, &QPushButton::clicked, this, &SuiteDock::onDuplicateSuite);
-  connect(removeBtn, &QPushButton::clicked, this, &SuiteDock::onRemoveSuite);
-  connect(activateBtn, &QPushButton::clicked, this, &SuiteDock::onActivateSelected);
-  connect(clearActiveBtn, &QPushButton::clicked, this, &SuiteDock::onClearActive);
+  connect(m_renameBtn, &QPushButton::clicked, this, &SuiteDock::onRenameSuite);
+  connect(m_duplicateBtn, &QPushButton::clicked, this,
+          &SuiteDock::onDuplicateSuite);
+  connect(m_removeBtn, &QPushButton::clicked, this, &SuiteDock::onRemoveSuite);
+  connect(m_activateBtn, &QPushButton::clicked, this,
+          &SuiteDock::onActivateSelected);
+  connect(m_deactivateBtn, &QPushButton::clicked, this,
+          &SuiteDock::onClearActive);
   connect(m_openFolderCheck, &QCheckBox::toggled, this,
           &SuiteDock::onOpenFolderToggled);
-  connect(addStepBtn, &QPushButton::clicked, this, &SuiteDock::onAddStep);
-  connect(editStepBtn, &QPushButton::clicked, this, &SuiteDock::onEditStep);
-  connect(removeStepBtn, &QPushButton::clicked, this, &SuiteDock::onRemoveStep);
-  connect(upBtn, &QPushButton::clicked, this, &SuiteDock::onMoveStepUp);
-  connect(downBtn, &QPushButton::clicked, this, &SuiteDock::onMoveStepDown);
-  connect(runBtn, &QPushButton::clicked, this, &SuiteDock::onRunNow);
+  connect(m_addStepBtn, &QPushButton::clicked, this, &SuiteDock::onAddStep);
+  connect(m_editStepBtn, &QPushButton::clicked, this, &SuiteDock::onEditStep);
+  connect(m_stepList, &QListWidget::itemDoubleClicked, this,
+          [this](QListWidgetItem *) { onEditStep(); });
+  connect(m_stepList, &QListWidget::itemSelectionChanged, this,
+          &SuiteDock::updateButtonStates);
+  connect(m_removeStepBtn, &QPushButton::clicked, this,
+          &SuiteDock::onRemoveStep);
+  connect(m_upBtn, &QPushButton::clicked, this, &SuiteDock::onMoveStepUp);
+  connect(m_downBtn, &QPushButton::clicked, this, &SuiteDock::onMoveStepDown);
+  connect(m_runBtn, &QPushButton::clicked, this, &SuiteDock::onRunNow);
 
   refresh();
 }
@@ -150,6 +282,38 @@ void SuiteDock::persistSelectedSuite()
   m_store->updateSuite(*suite);
 }
 
+void SuiteDock::selectSuiteById(const QString &id)
+{
+  for (int i = 0; i < m_suiteList->count(); ++i) {
+    if (m_suiteList->item(i)->data(Qt::UserRole).toString() == id) {
+      m_suiteList->setCurrentRow(i);
+      return;
+    }
+  }
+}
+
+void SuiteDock::updateButtonStates()
+{
+  const bool hasSuite = !selectedSuiteId().isEmpty();
+  const bool hasActive = m_store && !m_store->activeSuiteId().isEmpty();
+  const int stepRow = m_stepList->currentRow();
+  const int stepCount = m_stepList->count();
+  const bool hasStep = hasSuite && stepRow >= 0;
+
+  m_renameBtn->setEnabled(hasSuite);
+  m_duplicateBtn->setEnabled(hasSuite);
+  m_removeBtn->setEnabled(hasSuite);
+  m_activateBtn->setEnabled(hasSuite);
+  m_deactivateBtn->setEnabled(hasActive);
+  m_openFolderCheck->setEnabled(hasSuite);
+  m_addStepBtn->setEnabled(hasSuite);
+  m_editStepBtn->setEnabled(hasStep);
+  m_removeStepBtn->setEnabled(hasStep);
+  m_upBtn->setEnabled(hasStep && stepRow > 0);
+  m_downBtn->setEnabled(hasStep && stepRow < stepCount - 1);
+  m_runBtn->setEnabled(hasActive);
+}
+
 void SuiteDock::refresh()
 {
   if (!m_store)
@@ -157,15 +321,20 @@ void SuiteDock::refresh()
 
   m_updating = true;
   const QString previous = selectedSuiteId();
+  const int previousStepRow = m_stepList->currentRow();
   m_suiteList->clear();
 
   for (const Suite &suite : m_store->suites()) {
     const bool active = suite.id == m_store->activeSuiteId();
     auto *item = new QListWidgetItem(
-        QStringLiteral("%1%2").arg(active ? QStringLiteral("● ") : QString(),
-                                   suite.name),
-        m_suiteList);
+        active ? tr("%1  —  ativa").arg(suite.name) : suite.name, m_suiteList);
     item->setData(Qt::UserRole, suite.id);
+    if (active) {
+      QFont font = item->font();
+      font.setBold(true);
+      item->setFont(font);
+      item->setToolTip(tr("Esta é a suíte que roda ao iniciar a gravação."));
+    }
   }
 
   int selectRow = 0;
@@ -179,11 +348,15 @@ void SuiteDock::refresh()
     m_suiteList->setCurrentRow(selectRow);
 
   const Suite *active = m_store->activeSuite();
-  m_activeLabel->setText(active ? tr("Suite ativa: %1").arg(active->name)
-                                : tr("Nenhuma suite ativa"));
+  m_activeLabel->setText(active ? tr("Suíte ativa: %1").arg(active->name)
+                                : tr("Nenhuma suíte ativa"));
 
   m_updating = false;
   onSelectionChanged();
+
+  if (previousStepRow >= 0 && previousStepRow < m_stepList->count())
+    m_stepList->setCurrentRow(previousStepRow);
+  updateButtonStates();
 }
 
 void SuiteDock::onSelectionChanged()
@@ -196,37 +369,44 @@ void SuiteDock::onSelectionChanged()
   m_openFolderCheck->blockSignals(true);
   if (!suite) {
     m_openFolderCheck->setChecked(false);
-    m_openFolderCheck->setEnabled(false);
     m_openFolderCheck->blockSignals(false);
+    updateButtonStates();
     return;
   }
 
-  m_openFolderCheck->setEnabled(true);
   m_openFolderCheck->setChecked(suite->openRecordingFolderOnStop);
   m_openFolderCheck->blockSignals(false);
 
+  int index = 1;
   for (const SuiteStep &step : suite->steps) {
-    m_stepList->addItem(QStringLiteral("[%1] %2")
-                            .arg(stepTypeLabel(step.type), step.summary()));
+    auto *item = new QListWidgetItem(
+        tr("%1. %2 — %3")
+            .arg(index++)
+            .arg(stepTypeLabel(step.type), step.summary()),
+        m_stepList);
+    item->setToolTip(stepTypeHelp(step.type));
   }
+
+  if (suite->steps.isEmpty()) {
+    auto *item = new QListWidgetItem(
+        tr("Nenhum passo ainda. Use \"Adicionar passo\"."), m_stepList);
+    item->setFlags(Qt::NoItemFlags);
+  }
+
+  updateButtonStates();
 }
 
 void SuiteDock::onAddSuite()
 {
   bool ok = false;
   const QString name = QInputDialog::getText(
-      this, tr("Nova suite"), tr("Nome do jogo / suite:"), QLineEdit::Normal,
-      tr("Nova suite"), &ok);
+      this, tr("Nova suíte"), tr("Nome do jogo ou da situação:"),
+      QLineEdit::Normal, tr("Nova suíte"), &ok);
   if (!ok || name.trimmed().isEmpty())
     return;
   const Suite created = m_store->createSuite(name);
   refresh();
-  for (int i = 0; i < m_suiteList->count(); ++i) {
-    if (m_suiteList->item(i)->data(Qt::UserRole).toString() == created.id) {
-      m_suiteList->setCurrentRow(i);
-      break;
-    }
-  }
+  selectSuiteById(created.id);
 }
 
 void SuiteDock::onRenameSuite()
@@ -235,9 +415,9 @@ void SuiteDock::onRenameSuite()
   if (!suite)
     return;
   bool ok = false;
-  const QString name = QInputDialog::getText(this, tr("Renomear suite"),
-                                             tr("Novo nome:"), QLineEdit::Normal,
-                                             suite->name, &ok);
+  const QString name =
+      QInputDialog::getText(this, tr("Renomear suíte"), tr("Novo nome:"),
+                            QLineEdit::Normal, suite->name, &ok);
   if (!ok || name.trimmed().isEmpty())
     return;
   m_store->renameSuite(suite->id, name);
@@ -252,12 +432,7 @@ void SuiteDock::onDuplicateSuite()
   if (copy.id.isEmpty())
     return;
   refresh();
-  for (int i = 0; i < m_suiteList->count(); ++i) {
-    if (m_suiteList->item(i)->data(Qt::UserRole).toString() == copy.id) {
-      m_suiteList->setCurrentRow(i);
-      break;
-    }
-  }
+  selectSuiteById(copy.id);
 }
 
 void SuiteDock::onRemoveSuite()
@@ -266,8 +441,9 @@ void SuiteDock::onRemoveSuite()
   if (!suite)
     return;
   const auto answer = QMessageBox::question(
-      this, tr("Excluir suite"),
-      tr("Excluir a suite \"%1\"?").arg(suite->name));
+      this, tr("Excluir suíte"),
+      tr("Excluir a suíte \"%1\" e todos os seus passos?").arg(suite->name),
+      QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
   if (answer != QMessageBox::Yes)
     return;
   m_store->removeSuite(suite->id);
@@ -299,148 +475,322 @@ bool SuiteDock::editStepDialog(SuiteStep &step, bool isNew)
 {
   QDialog dialog(this);
   dialog.setWindowTitle(isNew ? tr("Adicionar passo") : tr("Editar passo"));
-  auto *form = new QFormLayout(&dialog);
+  dialog.setMinimumWidth(460);
 
+  auto *root = new QVBoxLayout(&dialog);
+  root->setSpacing(10);
+
+  auto *typeForm = new QFormLayout();
   auto *typeCombo = new QComboBox(&dialog);
-  const QVector<SuiteStepType> types = {
-      SuiteStepType::SetScene,         SuiteStepType::SetSourceVisible,
-      SuiteStepType::DelayMs,          SuiteStepType::SetTransition,
-      SuiteStepType::SetMute,          SuiteStepType::SetVolume,
-      SuiteStepType::IfCurrentScene,   SuiteStepType::IfSourceVisible,
-      SuiteStepType::RestartMedia,     SuiteStepType::OpenUrl,
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::SetScene),
+                     static_cast<int>(SuiteStepType::SetScene));
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::SetTransition),
+                     static_cast<int>(SuiteStepType::SetTransition));
+  typeCombo->insertSeparator(typeCombo->count());
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::SetSourceVisible),
+                     static_cast<int>(SuiteStepType::SetSourceVisible));
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::RestartMedia),
+                     static_cast<int>(SuiteStepType::RestartMedia));
+  typeCombo->insertSeparator(typeCombo->count());
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::SetMute),
+                     static_cast<int>(SuiteStepType::SetMute));
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::SetVolume),
+                     static_cast<int>(SuiteStepType::SetVolume));
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::AudioFade),
+                     static_cast<int>(SuiteStepType::AudioFade));
+  typeCombo->insertSeparator(typeCombo->count());
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::DelayMs),
+                     static_cast<int>(SuiteStepType::DelayMs));
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::IfCurrentScene),
+                     static_cast<int>(SuiteStepType::IfCurrentScene));
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::IfSourceVisible),
+                     static_cast<int>(SuiteStepType::IfSourceVisible));
+  typeCombo->insertSeparator(typeCombo->count());
+  typeCombo->addItem(stepTypeLabel(SuiteStepType::OpenUrl),
+                     static_cast<int>(SuiteStepType::OpenUrl));
+  typeForm->addRow(new QLabel(tr("O que este passo faz:"), &dialog), typeCombo);
+  root->addLayout(typeForm);
+
+  auto *helpLabel = new QLabel(&dialog);
+  helpLabel->setWordWrap(true);
+  helpLabel->setEnabled(false);
+  root->addWidget(helpLabel);
+
+  auto *line = new QFrame(&dialog);
+  line->setFrameShape(QFrame::HLine);
+  line->setFrameShadow(QFrame::Sunken);
+  root->addWidget(line);
+
+  auto *form = new QFormLayout();
+  form->setSpacing(8);
+  root->addLayout(form);
+
+  auto addRow = [&](const QString &text, QWidget *field) {
+    auto *label = new QLabel(text, &dialog);
+    label->setBuddy(field);
+    form->addRow(label, field);
+    return label;
   };
-  for (SuiteStepType type : types)
-    typeCombo->addItem(stepTypeLabel(type), static_cast<int>(type));
 
   auto *sceneCombo = new QComboBox(&dialog);
   sceneCombo->setEditable(true);
   sceneCombo->addItems(SuiteActions::sceneNames());
+  auto *sceneLabel = addRow(tr("Cena:"), sceneCombo);
 
   auto *sourceCombo = new QComboBox(&dialog);
   sourceCombo->setEditable(true);
+  auto *sourceLabel = addRow(tr("Fonte:"), sourceCombo);
 
-  auto *transitionCombo = new QComboBox(&dialog);
-  transitionCombo->setEditable(true);
-  transitionCombo->addItems(SuiteActions::transitionNames());
+  auto *visibleCombo = new QComboBox(&dialog);
+  visibleCombo->addItem(tr("Mostrar (deixar visível)"), true);
+  visibleCombo->addItem(tr("Ocultar (deixar invisível)"), false);
+  auto *visibleLabel = addRow(tr("Ação na fonte:"), visibleCombo);
 
-  auto *visibleCheck = new QCheckBox(tr("Visivel / mostrar"), &dialog);
-  auto *mutedCheck = new QCheckBox(tr("Mute"), &dialog);
-  auto *delaySpin = new QSpinBox(&dialog);
-  delaySpin->setRange(0, 600000);
-  delaySpin->setSuffix(QStringLiteral(" ms"));
-  auto *transitionSpin = new QSpinBox(&dialog);
-  transitionSpin->setRange(0, 60000);
-  transitionSpin->setSuffix(QStringLiteral(" ms"));
+  auto *expectCombo = new QComboBox(&dialog);
+  expectCombo->addItem(tr("Só continua se estiver visível"), true);
+  expectCombo->addItem(tr("Só continua se estiver oculta"), false);
+  auto *expectLabel = addRow(tr("Condição:"), expectCombo);
+
+  auto *muteCombo = new QComboBox(&dialog);
+  muteCombo->addItem(tr("Silenciar (deixar no mudo)"), true);
+  muteCombo->addItem(tr("Reativar o som (tirar do mudo)"), false);
+  auto *muteLabel = addRow(tr("Ação no áudio:"), muteCombo);
+
+  auto *fadeDirCombo = new QComboBox(&dialog);
+  fadeDirCombo->addItem(tr("Fade in — subir do silêncio até o volume"), true);
+  fadeDirCombo->addItem(tr("Fade out — descer até o silêncio"), false);
+  auto *fadeDirLabel = addRow(tr("Tipo de transição:"), fadeDirCombo);
+
+  auto *fadeCheck = new QCheckBox(
+      tr("Aplicar transição de áudio (fade) nesta fonte"), &dialog);
+  fadeCheck->setToolTip(
+      tr("Disponível porque esta fonte tem áudio. Sem isso, a mudança acontece "
+         "de uma vez."));
+  auto *fadeCheckLabel = addRow(QString(), fadeCheck);
+
   auto *volumeSpin = new QDoubleSpinBox(&dialog);
   volumeSpin->setRange(0.0, 100.0);
   volumeSpin->setSuffix(QStringLiteral(" %"));
   volumeSpin->setDecimals(1);
+  auto *volumeLabel = addRow(tr("Volume (0% = sem som):"), volumeSpin);
+
+  auto *fadeMsSpin = new QSpinBox(&dialog);
+  fadeMsSpin->setRange(0, 60000);
+  fadeMsSpin->setSuffix(QStringLiteral(" ms"));
+  fadeMsSpin->setSingleStep(100);
+  auto *fadeMsLabel = addRow(tr("Duração do fade (1000 ms = 1 segundo):"),
+                             fadeMsSpin);
+
+  auto *waitFadeCheck = new QCheckBox(
+      tr("Esperar o fade terminar antes do próximo passo"), &dialog);
+  waitFadeCheck->setToolTip(
+      tr("Desmarque para o fade continuar em segundo plano enquanto os passos "
+         "seguintes rodam."));
+  auto *waitFadeLabel = addRow(QString(), waitFadeCheck);
+
+  auto *transitionCombo = new QComboBox(&dialog);
+  transitionCombo->setEditable(true);
+  transitionCombo->addItem(QString());
+  transitionCombo->addItems(SuiteActions::transitionNames());
+  auto *transitionLabel = addRow(tr("Transição:"), transitionCombo);
+
+  auto *transitionSpin = new QSpinBox(&dialog);
+  transitionSpin->setRange(0, 60000);
+  transitionSpin->setSuffix(QStringLiteral(" ms"));
+  transitionSpin->setSingleStep(50);
+  auto *transitionSpinLabel = addRow(tr("Duração da transição:"), transitionSpin);
+
+  auto *delaySpin = new QSpinBox(&dialog);
+  delaySpin->setRange(0, 600000);
+  delaySpin->setSuffix(QStringLiteral(" ms"));
+  delaySpin->setSingleStep(100);
+  auto *delayLabel = addRow(tr("Esperar (1000 ms = 1 segundo):"), delaySpin);
+
   auto *urlEdit = new QLineEdit(&dialog);
+  urlEdit->setPlaceholderText(tr("https://exemplo.com ou D:\\Videos"));
+  auto *urlLabel = addRow(tr("Site, pasta ou programa:"), urlEdit);
 
-  form->addRow(tr("Tipo"), typeCombo);
-  form->addRow(tr("Cena"), sceneCombo);
-  form->addRow(tr("Fonte"), sourceCombo);
-  form->addRow(tr("Transicao"), transitionCombo);
-  form->addRow(tr("Duracao transicao"), transitionSpin);
-  form->addRow(tr("Delay"), delaySpin);
-  form->addRow(QString(), visibleCheck);
-  form->addRow(QString(), mutedCheck);
-  form->addRow(tr("Volume"), volumeSpin);
-  form->addRow(tr("URL / caminho"), urlEdit);
+  auto setRowVisible = [](QLabel *label, QWidget *field, bool visible) {
+    label->setVisible(visible);
+    field->setVisible(visible);
+  };
 
-  auto refreshSources = [&]() {
+  auto fillSources = [&](SuiteStepType type) {
     const QString current = sourceCombo->currentText();
+    sourceCombo->blockSignals(true);
     sourceCombo->clear();
-    QStringList names = SuiteActions::sourceNamesInScene(sceneCombo->currentText());
-    if (names.isEmpty())
+    QStringList names;
+    if (type == SuiteStepType::SetMute || type == SuiteStepType::SetVolume ||
+        type == SuiteStepType::AudioFade) {
       names = SuiteActions::audioSourceNames();
+      for (const QString &name :
+           SuiteActions::sourceNamesInScene(sceneCombo->currentText())) {
+        if (!names.contains(name))
+          names.append(name);
+      }
+    } else if (type == SuiteStepType::RestartMedia) {
+      names = SuiteActions::sourceNamesInScene(sceneCombo->currentText());
+      if (names.isEmpty())
+        names = SuiteActions::audioSourceNames();
+    } else {
+      names = SuiteActions::sourceNamesInScene(sceneCombo->currentText());
+    }
     sourceCombo->addItems(names);
     if (!current.isEmpty())
       sourceCombo->setCurrentText(current);
+    sourceCombo->blockSignals(false);
   };
 
-  auto updateVisibility = [&]() {
+  auto applyType = [&]() {
     const auto type =
         static_cast<SuiteStepType>(typeCombo->currentData().toInt());
-    const bool needScene =
-        type == SuiteStepType::SetScene ||
-        type == SuiteStepType::SetSourceVisible ||
-        type == SuiteStepType::IfCurrentScene ||
-        type == SuiteStepType::IfSourceVisible;
-    const bool needSource =
-        type == SuiteStepType::SetSourceVisible ||
-        type == SuiteStepType::SetMute || type == SuiteStepType::SetVolume ||
-        type == SuiteStepType::IfSourceVisible ||
-        type == SuiteStepType::RestartMedia;
-    const bool needTransition =
-        type == SuiteStepType::SetScene || type == SuiteStepType::SetTransition;
-    sceneCombo->setEnabled(needScene || type == SuiteStepType::SetSourceVisible);
-    sourceCombo->setEnabled(needSource);
-    transitionCombo->setEnabled(needTransition);
-    transitionSpin->setEnabled(needTransition);
-    delaySpin->setEnabled(type == SuiteStepType::DelayMs);
-    visibleCheck->setEnabled(type == SuiteStepType::SetSourceVisible ||
-                             type == SuiteStepType::IfSourceVisible);
-    mutedCheck->setEnabled(type == SuiteStepType::SetMute);
-    volumeSpin->setEnabled(type == SuiteStepType::SetVolume);
-    urlEdit->setEnabled(type == SuiteStepType::OpenUrl);
+
+    const bool needScene = type == SuiteStepType::SetScene ||
+                           type == SuiteStepType::SetSourceVisible ||
+                           type == SuiteStepType::IfCurrentScene ||
+                           type == SuiteStepType::IfSourceVisible;
+    const bool needSource = type == SuiteStepType::SetSourceVisible ||
+                            type == SuiteStepType::IfSourceVisible ||
+                            type == SuiteStepType::SetMute ||
+                            type == SuiteStepType::SetVolume ||
+                            type == SuiteStepType::AudioFade ||
+                            type == SuiteStepType::RestartMedia;
+    const bool needTransition = type == SuiteStepType::SetScene ||
+                                type == SuiteStepType::SetTransition;
+
+    // O fade só é oferecido quando a fonte escolhida realmente tem áudio.
+    const bool hasAudio =
+        needSource && SuiteActions::sourceHasAudio(sourceCombo->currentText());
+    const bool canOfferFade = hasAudio &&
+                              (type == SuiteStepType::SetVolume ||
+                               type == SuiteStepType::SetSourceVisible);
+    const bool fadeOn = type == SuiteStepType::AudioFade ||
+                        (canOfferFade && fadeCheck->isChecked());
+    const bool fadeInSelected =
+        type == SuiteStepType::AudioFade ? fadeDirCombo->currentData().toBool()
+                                         : true;
+    const bool needVolume =
+        type == SuiteStepType::SetVolume ||
+        (type == SuiteStepType::AudioFade && fadeInSelected) ||
+        (type == SuiteStepType::SetSourceVisible && fadeOn &&
+         visibleCombo->currentData().toBool());
+
+    helpLabel->setText(stepTypeHelp(type));
+
+    setRowVisible(sceneLabel, sceneCombo, needScene);
+    setRowVisible(sourceLabel, sourceCombo, needSource);
+    setRowVisible(visibleLabel, visibleCombo,
+                  type == SuiteStepType::SetSourceVisible);
+    setRowVisible(expectLabel, expectCombo,
+                  type == SuiteStepType::IfSourceVisible);
+    setRowVisible(muteLabel, muteCombo, type == SuiteStepType::SetMute);
+    setRowVisible(fadeDirLabel, fadeDirCombo, type == SuiteStepType::AudioFade);
+    setRowVisible(fadeCheckLabel, fadeCheck, canOfferFade);
+    setRowVisible(volumeLabel, volumeSpin, needVolume);
+    setRowVisible(fadeMsLabel, fadeMsSpin, fadeOn);
+    setRowVisible(waitFadeLabel, waitFadeCheck, fadeOn);
+    setRowVisible(transitionLabel, transitionCombo, needTransition);
+    setRowVisible(transitionSpinLabel, transitionSpin, needTransition);
+    setRowVisible(delayLabel, delaySpin, type == SuiteStepType::DelayMs);
+    setRowVisible(urlLabel, urlEdit, type == SuiteStepType::OpenUrl);
+
+    if (type == SuiteStepType::SetVolume)
+      volumeLabel->setText(tr("Volume (0% = sem som):"));
+    else
+      volumeLabel->setText(tr("Volume no fim do fade:"));
+
+    if (type == SuiteStepType::SetScene)
+      sceneLabel->setText(tr("Ir para a cena:"));
+    else if (type == SuiteStepType::IfCurrentScene)
+      sceneLabel->setText(tr("Cena que precisa estar no ar:"));
+    else
+      sceneLabel->setText(tr("Cena onde está a fonte:"));
+
     if (type == SuiteStepType::SetMute || type == SuiteStepType::SetVolume ||
-        type == SuiteStepType::RestartMedia) {
-      sourceCombo->clear();
-      sourceCombo->addItems(SuiteActions::audioSourceNames());
-      QStringList media = SuiteActions::sourceNamesInScene(sceneCombo->currentText());
-      for (const QString &name : media) {
-        if (sourceCombo->findText(name) < 0)
-          sourceCombo->addItem(name);
-      }
-    } else {
-      refreshSources();
-    }
+        type == SuiteStepType::AudioFade)
+      sourceLabel->setText(tr("Fonte de áudio:"));
+    else if (type == SuiteStepType::RestartMedia)
+      sourceLabel->setText(tr("Fonte de mídia:"));
+    else
+      sourceLabel->setText(tr("Fonte:"));
+
+    if (needSource)
+      fillSources(type);
+
+    dialog.adjustSize();
   };
 
   connect(typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-          &dialog, updateVisibility);
+          &dialog, [&](int) { applyType(); });
   connect(sceneCombo, &QComboBox::currentTextChanged, &dialog,
-          [&](const QString &) { refreshSources(); });
+          [&](const QString &) { applyType(); });
+  // A fonte escolhida define se as opções de fade aparecem ou não.
+  connect(sourceCombo, &QComboBox::currentTextChanged, &dialog,
+          [&](const QString &) { applyType(); });
+  connect(visibleCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          &dialog, [&](int) { applyType(); });
+  connect(fadeDirCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          &dialog, [&](int) { applyType(); });
+  connect(fadeCheck, &QCheckBox::toggled, &dialog,
+          [&](bool) { applyType(); });
 
-  // Prefill
   for (int i = 0; i < typeCombo->count(); ++i) {
-    if (static_cast<SuiteStepType>(typeCombo->itemData(i).toInt()) == step.type) {
+    if (typeCombo->itemData(i).isValid() &&
+        static_cast<SuiteStepType>(typeCombo->itemData(i).toInt()) == step.type) {
       typeCombo->setCurrentIndex(i);
       break;
     }
   }
   sceneCombo->setCurrentText(step.scene);
-  refreshSources();
-  sourceCombo->setCurrentText(step.source);
   transitionCombo->setCurrentText(step.transition);
   transitionSpin->setValue(step.transitionMs);
   delaySpin->setValue(step.ms);
-  visibleCheck->setChecked(step.visible);
-  mutedCheck->setChecked(step.muted);
+  visibleCombo->setCurrentIndex(step.visible ? 0 : 1);
+  expectCombo->setCurrentIndex(step.visible ? 0 : 1);
+  muteCombo->setCurrentIndex(step.muted ? 0 : 1);
   volumeSpin->setValue(step.volume * 100.0);
+  fadeDirCombo->setCurrentIndex(step.fadeIn ? 0 : 1);
+  fadeCheck->setChecked(step.fadeAudio);
+  fadeMsSpin->setValue(step.fadeMs);
+  waitFadeCheck->setChecked(step.waitForFade);
   urlEdit->setText(step.url);
-  updateVisibility();
+  applyType();
+  sourceCombo->setCurrentText(step.source);
+  applyType();
 
-  auto *buttons =
-      new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-  form->addRow(buttons);
+  auto *buttons = new QDialogButtonBox(
+      QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  buttons->button(QDialogButtonBox::Ok)->setText(tr("Salvar"));
+  buttons->button(QDialogButtonBox::Cancel)->setText(tr("Cancelar"));
+  root->addWidget(buttons);
   connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
 
   if (dialog.exec() != QDialog::Accepted)
     return false;
 
-  step.type = static_cast<SuiteStepType>(typeCombo->currentData().toInt());
+  const auto type = static_cast<SuiteStepType>(typeCombo->currentData().toInt());
+  step.type = type;
+  step.transitionMs = transitionSpin->value();
+  step.ms = delaySpin->value();
+  step.muted = muteCombo->currentData().toBool();
+  step.volume = volumeSpin->value() / 100.0;
+  step.url = urlEdit->text().trimmed();
   step.scene = sceneCombo->currentText().trimmed();
   step.source = sourceCombo->currentText().trimmed();
   step.transition = transitionCombo->currentText().trimmed();
-  step.transitionMs = transitionSpin->value();
-  step.ms = delaySpin->value();
-  step.visible = visibleCheck->isChecked();
-  step.muted = mutedCheck->isChecked();
-  step.volume = volumeSpin->value() / 100.0;
-  step.url = urlEdit->text().trimmed();
+  step.visible = type == SuiteStepType::IfSourceVisible
+                     ? expectCombo->currentData().toBool()
+                     : visibleCombo->currentData().toBool();
+  step.fadeIn = type == SuiteStepType::AudioFade
+                    ? fadeDirCombo->currentData().toBool()
+                    : step.visible;
+  step.fadeMs = fadeMsSpin->value();
+  step.waitForFade = waitFadeCheck->isChecked();
+  step.fadeAudio = fadeCheck->isChecked() &&
+                   SuiteActions::sourceHasAudio(step.source) &&
+                   (type == SuiteStepType::SetVolume ||
+                    type == SuiteStepType::SetSourceVisible);
   return true;
 }
 
@@ -450,7 +800,7 @@ void SuiteDock::onAddStep()
   if (!suite)
     return;
   SuiteStep step;
-  step.type = SuiteStepType::DelayMs;
+  step.type = SuiteStepType::SetScene;
   step.ms = 1000;
   if (!editStepDialog(step, true))
     return;

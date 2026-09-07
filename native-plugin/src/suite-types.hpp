@@ -12,6 +12,7 @@ enum class SuiteStepType {
   SetTransition,
   SetMute,
   SetVolume,
+  AudioFade,
   IfCurrentScene,
   IfSourceVisible,
   RestartMedia,
@@ -31,6 +32,13 @@ struct SuiteStep {
   bool visible = true;
   bool muted = true;
   double volume = 1.0;
+
+  // Transicao de audio (fade). fadeAudio liga o fade nos passos de volume e de
+  // mostrar/ocultar fonte; fadeIn escolhe a direcao no passo AudioFade.
+  bool fadeAudio = false;
+  bool fadeIn = true;
+  int fadeMs = 500;
+  bool waitForFade = true;
 
   QJsonObject toJson() const;
   static SuiteStep fromJson(const QJsonObject &obj);

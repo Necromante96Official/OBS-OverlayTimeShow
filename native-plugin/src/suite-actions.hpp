@@ -11,6 +11,9 @@ QStringList sourceNamesInScene(const QString &sceneName);
 QStringList transitionNames();
 QStringList audioSourceNames();
 
+// Diz se a fonte tem canal de audio (serve para liberar as opcoes de fade).
+bool sourceHasAudio(const QString &sourceName);
+
 bool setScene(const QString &sceneName);
 bool setSourceVisible(const QString &sceneName, const QString &sourceName,
                       bool visible);
@@ -25,6 +28,10 @@ bool isCurrentScene(const QString &sceneName);
 bool isSourceVisible(const QString &sceneName, const QString &sourceName,
                      bool expectVisible);
 
-bool executeStep(const SuiteStep &step, bool *skipNextOut);
+// Executa um passo. skipNextOut avisa que o passo seguinte deve ser ignorado
+// (condicoes) e waitMsOut informa quanto tempo esperar antes do proximo passo
+// (transicoes de audio que precisam terminar primeiro).
+bool executeStep(const SuiteStep &step, bool *skipNextOut,
+                 int *waitMsOut = nullptr);
 
 } // namespace SuiteActions

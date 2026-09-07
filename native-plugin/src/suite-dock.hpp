@@ -37,6 +37,8 @@ private:
   QString selectedSuiteId() const;
   Suite *selectedSuite();
   void persistSelectedSuite();
+  void selectSuiteById(const QString &id);
+  void updateButtonStates();
   bool editStepDialog(SuiteStep &step, bool isNew);
 
   SuiteStore *m_store = nullptr;
@@ -46,5 +48,18 @@ private:
   QListWidget *m_stepList = nullptr;
   QCheckBox *m_openFolderCheck = nullptr;
   QLabel *m_activeLabel = nullptr;
+
+  QPushButton *m_renameBtn = nullptr;
+  QPushButton *m_duplicateBtn = nullptr;
+  QPushButton *m_removeBtn = nullptr;
+  QPushButton *m_activateBtn = nullptr;
+  QPushButton *m_deactivateBtn = nullptr;
+  QPushButton *m_addStepBtn = nullptr;
+  QPushButton *m_editStepBtn = nullptr;
+  QPushButton *m_removeStepBtn = nullptr;
+  QPushButton *m_upBtn = nullptr;
+  QPushButton *m_downBtn = nullptr;
+  QPushButton *m_runBtn = nullptr;
+
   bool m_updating = false;
 };

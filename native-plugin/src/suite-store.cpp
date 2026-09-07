@@ -53,7 +53,7 @@ bool SuiteStore::load()
     if (suite.id.isEmpty())
       suite.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     if (suite.name.isEmpty())
-      suite.name = QStringLiteral("Suite");
+      suite.name = QStringLiteral("Suíte");
     m_suites.append(suite);
   }
 
@@ -111,7 +111,7 @@ Suite SuiteStore::createSuite(const QString &name)
 {
   Suite suite;
   suite.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-  suite.name = name.trimmed().isEmpty() ? QStringLiteral("Nova suite") : name.trimmed();
+  suite.name = name.trimmed().isEmpty() ? QStringLiteral("Nova suíte") : name.trimmed();
   suite.openRecordingFolderOnStop = true;
   m_suites.append(suite);
   if (m_activeSuiteId.isEmpty())
@@ -154,7 +154,7 @@ Suite SuiteStore::duplicateSuite(const QString &id)
     return {};
   Suite copy = *src;
   copy.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-  copy.name = src->name + QStringLiteral(" (copia)");
+  copy.name = src->name + QStringLiteral(" (cópia)");
   m_suites.append(copy);
   save();
   emit changed();

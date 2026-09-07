@@ -2,7 +2,25 @@
 
 #include <QObject>
 
-namespace SuiteTypesDetail {
+namespace {
+
+QString quoted(const QString &value, const QString &fallback)
+{
+  if (value.trimmed().isEmpty())
+    return fallback;
+  return QStringLiteral("\"%1\"").arg(value.trimmed());
+}
+
+QString formatDuration(int ms)
+{
+  if (ms >= 1000) {
+    const double seconds = ms / 1000.0;
+    QString text = QString::number(seconds, 'f', seconds < 10.0 ? 1 : 0);
+    text.replace(QLatin1Char('.'), QLatin1Char(','));
+    return QObject::tr("%1 s").arg(text);
+  }
+  return QObject::tr("%1 ms").arg(ms);
+}
 
 QString typeKey(SuiteStepType type)
 {
@@ -19,6 +37,8 @@ QString typeKey(SuiteStepType type)
     return QStringLiteral("set_mute");
   case SuiteStepType::SetVolume:
     return QStringLiteral("set_volume");
+  case SuiteStepType::AudioFade:
+    return QStringLiteral("audio_fade");
   case SuiteStepType::IfCurrentScene:
     return QStringLiteral("if_current_scene");
   case SuiteStepType::IfSourceVisible:
@@ -31,11 +51,11 @@ QString typeKey(SuiteStepType type)
   return QStringLiteral("delay_ms");
 }
 
-} // namespace SuiteTypesDetail
+} // namespace
 
 QString suiteStepTypeToString(SuiteStepType type)
 {
-  return SuiteTypesDetail::typeKey(type);
+  return typeKey(type);
 }
 
 SuiteStepType suiteStepTypeFromString(const QString &value)
@@ -52,6 +72,8 @@ SuiteStepType suiteStepTypeFromString(const QString &value)
     return SuiteStepType::SetMute;
   if (value == QLatin1String("set_volume"))
     return SuiteStepType::SetVolume;
+  if (value == QLatin1String("audio_fade"))
+    return SuiteStepType::AudioFade;
   if (value == QLatin1String("if_current_scene"))
     return SuiteStepType::IfCurrentScene;
   if (value == QLatin1String("if_source_visible"))
@@ -67,48 +89,19 @@ QJsonObject SuiteStep::toJson() const
 {
   QJsonObject obj;
   obj.insert(QStringLiteral("type"), suiteStepTypeToString(type));
-
-  switch (type) {
-  case SuiteStepType::SetScene:
-    obj.insert(QStringLiteral("scene"), scene);
-    obj.insert(QStringLiteral("transition"), transition);
-    obj.insert(QStringLiteral("transitionMs"), transitionMs);
-    break;
-  case SuiteStepType::SetSourceVisible:
-    obj.insert(QStringLiteral("scene"), scene);
-    obj.insert(QStringLiteral("source"), source);
-    obj.insert(QStringLiteral("visible"), visible);
-    break;
-  case SuiteStepType::DelayMs:
-    obj.insert(QStringLiteral("ms"), ms);
-    break;
-  case SuiteStepType::SetTransition:
-    obj.insert(QStringLiteral("transition"), transition);
-    obj.insert(QStringLiteral("transitionMs"), transitionMs);
-    break;
-  case SuiteStepType::SetMute:
-    obj.insert(QStringLiteral("source"), source);
-    obj.insert(QStringLiteral("muted"), muted);
-    break;
-  case SuiteStepType::SetVolume:
-    obj.insert(QStringLiteral("source"), source);
-    obj.insert(QStringLiteral("volume"), volume);
-    break;
-  case SuiteStepType::IfCurrentScene:
-    obj.insert(QStringLiteral("scene"), scene);
-    break;
-  case SuiteStepType::IfSourceVisible:
-    obj.insert(QStringLiteral("scene"), scene);
-    obj.insert(QStringLiteral("source"), source);
-    obj.insert(QStringLiteral("visible"), visible);
-    break;
-  case SuiteStepType::RestartMedia:
-    obj.insert(QStringLiteral("source"), source);
-    break;
-  case SuiteStepType::OpenUrl:
-    obj.insert(QStringLiteral("url"), url);
-    break;
-  }
+  obj.insert(QStringLiteral("scene"), scene);
+  obj.insert(QStringLiteral("source"), source);
+  obj.insert(QStringLiteral("transition"), transition);
+  obj.insert(QStringLiteral("url"), url);
+  obj.insert(QStringLiteral("transitionMs"), transitionMs);
+  obj.insert(QStringLiteral("ms"), ms);
+  obj.insert(QStringLiteral("visible"), visible);
+  obj.insert(QStringLiteral("muted"), muted);
+  obj.insert(QStringLiteral("volume"), volume);
+  obj.insert(QStringLiteral("fadeAudio"), fadeAudio);
+  obj.insert(QStringLiteral("fadeIn"), fadeIn);
+  obj.insert(QStringLiteral("fadeMs"), fadeMs);
+  obj.insert(QStringLiteral("waitForFade"), waitForFade);
   return obj;
 }
 
@@ -125,39 +118,92 @@ SuiteStep SuiteStep::fromJson(const QJsonObject &obj)
   step.visible = obj.value(QStringLiteral("visible")).toBool(true);
   step.muted = obj.value(QStringLiteral("muted")).toBool(true);
   step.volume = obj.value(QStringLiteral("volume")).toDouble(1.0);
+  step.fadeAudio = obj.value(QStringLiteral("fadeAudio")).toBool(false);
+  step.fadeIn = obj.value(QStringLiteral("fadeIn")).toBool(true);
+  step.fadeMs = obj.value(QStringLiteral("fadeMs")).toInt(500);
+  step.waitForFade = obj.value(QStringLiteral("waitForFade")).toBool(true);
   return step;
 }
 
 QString SuiteStep::summary() const
 {
   switch (type) {
-  case SuiteStepType::SetScene:
-    return QObject::tr("Cena: %1").arg(scene);
-  case SuiteStepType::SetSourceVisible:
-    return QObject::tr("Fonte %1: %2")
-        .arg(source, visible ? QObject::tr("mostrar") : QObject::tr("ocultar"));
-  case SuiteStepType::DelayMs:
-    return QObject::tr("Esperar %1 ms").arg(ms);
-  case SuiteStepType::SetTransition:
-    return QObject::tr("Transicao: %1 (%2 ms)").arg(transition).arg(transitionMs);
-  case SuiteStepType::SetMute:
-    return QObject::tr("Audio %1: %2")
-        .arg(source, muted ? QObject::tr("mute") : QObject::tr("unmute"));
-  case SuiteStepType::SetVolume:
-    return QObject::tr("Volume %1: %2%")
-        .arg(source)
-        .arg(qRound(volume * 100.0));
-  case SuiteStepType::IfCurrentScene:
-    return QObject::tr("Se cena atual = %1").arg(scene);
-  case SuiteStepType::IfSourceVisible:
-    return QObject::tr("Se fonte %1 %2")
-        .arg(source, visible ? QObject::tr("visivel") : QObject::tr("oculta"));
-  case SuiteStepType::RestartMedia:
-    return QObject::tr("Reiniciar midia: %1").arg(source);
-  case SuiteStepType::OpenUrl:
-    return QObject::tr("Abrir: %1").arg(url);
+  case SuiteStepType::SetScene: {
+    QString text = QObject::tr("Trocar para a cena %1")
+                       .arg(quoted(scene, QObject::tr("(cena não escolhida)")));
+    if (!transition.trimmed().isEmpty()) {
+      text += QObject::tr(", usando a transição %1 de %2")
+                  .arg(quoted(transition, QString()), formatDuration(transitionMs));
+    }
+    return text;
   }
-  return QObject::tr("Passo");
+  case SuiteStepType::SetSourceVisible: {
+    QString text =
+        visible ? QObject::tr("Mostrar a fonte %1 (deixar visível) na cena %2")
+                      .arg(quoted(source, QObject::tr("(fonte não escolhida)")),
+                           quoted(scene, QObject::tr("(cena não escolhida)")))
+                : QObject::tr("Ocultar a fonte %1 (deixar invisível) na cena %2")
+                      .arg(quoted(source, QObject::tr("(fonte não escolhida)")),
+                           quoted(scene, QObject::tr("(cena não escolhida)")));
+    if (fadeAudio) {
+      text += visible
+                  ? QObject::tr(", com o áudio subindo do silêncio até %1% em %2")
+                        .arg(qRound(volume * 100.0))
+                        .arg(formatDuration(fadeMs))
+                  : QObject::tr(", com o áudio descendo até o silêncio em %1 "
+                                "antes de ocultar")
+                        .arg(formatDuration(fadeMs));
+    }
+    return text;
+  }
+  case SuiteStepType::DelayMs:
+    return QObject::tr("Esperar %1 antes do próximo passo").arg(formatDuration(ms));
+  case SuiteStepType::SetTransition:
+    return QObject::tr("Definir a transição %1 com duração de %2")
+        .arg(quoted(transition, QObject::tr("(transição não escolhida)")),
+             formatDuration(transitionMs));
+  case SuiteStepType::SetMute:
+    return muted ? QObject::tr("Silenciar o áudio de %1 (mudo)")
+                       .arg(quoted(source, QObject::tr("(fonte não escolhida)")))
+                 : QObject::tr("Ativar o áudio de %1 (tirar do mudo)")
+                       .arg(quoted(source, QObject::tr("(fonte não escolhida)")));
+  case SuiteStepType::SetVolume: {
+    QString text = QObject::tr("Ajustar o volume de %1 para %2%")
+                       .arg(quoted(source, QObject::tr("(fonte não escolhida)")))
+                       .arg(qRound(volume * 100.0));
+    if (fadeAudio)
+      text += QObject::tr(", deslizando aos poucos em %1").arg(formatDuration(fadeMs));
+    else
+      text += QObject::tr(", na hora");
+    return text;
+  }
+  case SuiteStepType::AudioFade:
+    return fadeIn
+               ? QObject::tr("Fade in: subir o áudio de %1 do silêncio até %2% "
+                             "em %3")
+                     .arg(quoted(source, QObject::tr("(fonte não escolhida)")))
+                     .arg(qRound(volume * 100.0))
+                     .arg(formatDuration(fadeMs))
+               : QObject::tr("Fade out: descer o áudio de %1 até o silêncio em %2")
+                     .arg(quoted(source, QObject::tr("(fonte não escolhida)")),
+                          formatDuration(fadeMs));
+  case SuiteStepType::IfCurrentScene:
+    return QObject::tr("Só continuar se a cena atual for %1 (senão, pula o próximo passo)")
+        .arg(quoted(scene, QObject::tr("(cena não escolhida)")));
+  case SuiteStepType::IfSourceVisible:
+    return visible
+               ? QObject::tr("Só continuar se a fonte %1 estiver visível (senão, pula o próximo passo)")
+                     .arg(quoted(source, QObject::tr("(fonte não escolhida)")))
+               : QObject::tr("Só continuar se a fonte %1 estiver oculta (senão, pula o próximo passo)")
+                     .arg(quoted(source, QObject::tr("(fonte não escolhida)")));
+  case SuiteStepType::RestartMedia:
+    return QObject::tr("Reiniciar a mídia %1 desde o começo")
+        .arg(quoted(source, QObject::tr("(fonte não escolhida)")));
+  case SuiteStepType::OpenUrl:
+    return QObject::tr("Abrir %1 no computador")
+        .arg(quoted(url, QObject::tr("(endereço não informado)")));
+  }
+  return QObject::tr("Passo sem descrição");
 }
 
 QJsonObject Suite::toJson() const

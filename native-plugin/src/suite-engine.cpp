@@ -1,5 +1,6 @@
 #include "suite-engine.hpp"
 #include "suite-actions.hpp"
+#include "suite-fader.hpp"
 
 #include <obs-module.h>
 
@@ -21,7 +22,7 @@ void SuiteEngine::runActiveNow()
     return;
   const Suite *suite = m_store->activeSuite();
   if (!suite) {
-    blog(LOG_INFO, "[obs-overlay-time-show] nenhuma suite ativa");
+    blog(LOG_INFO, "[obs-overlay-time-show] nenhuma suite ativa no momento");
     return;
   }
   runSuite(*suite);
@@ -43,6 +44,9 @@ void SuiteEngine::onRecordingStopped()
 
 void SuiteEngine::cancel()
 {
+  // Aplica o volume final dos fades pendentes, para nao deixar audio
+  // parado no meio do caminho.
+  SuiteFader::finishAllNow();
   m_timer.stop();
   m_queue.clear();
   m_index = 0;
@@ -85,12 +89,19 @@ void SuiteEngine::advance()
     }
 
     bool skipNext = false;
-    const bool ok = SuiteActions::executeStep(step, &skipNext);
+    int waitMs = 0;
+    const bool ok = SuiteActions::executeStep(step, &skipNext, &waitMs);
     if (!ok) {
       blog(LOG_WARNING, "[obs-overlay-time-show] passo falhou: %s",
            step.summary().toUtf8().constData());
     }
     m_skipNext = skipNext;
+
+    // Passos com transicao de audio podem pedir para esperar o fade terminar.
+    if (waitMs > 0) {
+      m_timer.start(waitMs);
+      return;
+    }
   }
 
   finish();

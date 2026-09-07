@@ -46,6 +46,8 @@ target_sources(
     src/suite-store.hpp
     src/suite-actions.cpp
     src/suite-actions.hpp
+    src/suite-fader.cpp
+    src/suite-fader.hpp
     src/suite-engine.cpp
     src/suite-engine.hpp
     src/suite-dock.cpp
