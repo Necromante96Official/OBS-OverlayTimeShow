@@ -28,6 +28,18 @@ void SuiteEngine::runActiveNow()
   runSuite(*suite);
 }
 
+void SuiteEngine::runSuiteById(const QString &id)
+{
+  if (!m_store || id.isEmpty())
+    return;
+  const Suite *suite = m_store->suiteById(id);
+  if (!suite) {
+    blog(LOG_WARNING, "[obs-overlay-time-show] suite do atalho nao existe mais");
+    return;
+  }
+  runSuite(*suite);
+}
+
 void SuiteEngine::onRecordingStopped()
 {
   cancel();

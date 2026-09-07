@@ -3,6 +3,7 @@
 #include "suite-types.hpp"
 
 #include <QObject>
+#include <QStringList>
 #include <QVector>
 
 class SuiteStore : public QObject {
@@ -27,6 +28,14 @@ public:
   bool renameSuite(const QString &id, const QString &name);
   bool removeSuite(const QString &id);
   Suite duplicateSuite(const QString &id);
+
+  // Junta os passos de varias suites, na ordem dos ids recebidos, em uma
+  // suite nova. Devolve a suite criada (id vazio quando nao da para mesclar).
+  Suite mergeSuites(const QStringList &ids, const QString &name,
+                    bool removeOriginals);
+
+  // Nome sugerido para a mesclagem, no formato "A + B + C".
+  QString suggestedMergeName(const QStringList &ids) const;
   bool setActiveSuite(const QString &id);
   bool clearActiveSuite();
   bool updateSuite(const Suite &suite);

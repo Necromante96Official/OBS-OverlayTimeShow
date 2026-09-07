@@ -13,6 +13,8 @@ public:
 
   void runActiveOnStart();
   void runActiveNow();
+  // Roda uma suite especifica, mesmo que ela nao seja a ativa (atalhos).
+  void runSuiteById(const QString &id);
   void onRecordingStopped();
   void cancel();
   bool isRunning() const { return m_running; }

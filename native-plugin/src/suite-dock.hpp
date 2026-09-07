@@ -25,6 +25,8 @@ private slots:
   void onRemoveSuite();
   void onActivateSelected();
   void onClearActive();
+  void onMergeSelected();
+  void onSuiteContextMenu(const QPoint &pos);
   void onOpenFolderToggled(bool checked);
   void onAddStep();
   void onEditStep();
@@ -35,6 +37,8 @@ private slots:
 
 private:
   QString selectedSuiteId() const;
+  // Ids das suites marcadas, na ordem em que aparecem na lista.
+  QStringList selectedSuiteIds() const;
   Suite *selectedSuite();
   void persistSelectedSuite();
   void selectSuiteById(const QString &id);
@@ -52,6 +56,7 @@ private:
   QPushButton *m_renameBtn = nullptr;
   QPushButton *m_duplicateBtn = nullptr;
   QPushButton *m_removeBtn = nullptr;
+  QPushButton *m_mergeBtn = nullptr;
   QPushButton *m_activateBtn = nullptr;
   QPushButton *m_deactivateBtn = nullptr;
   QPushButton *m_addStepBtn = nullptr;

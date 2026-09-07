@@ -11,9 +11,11 @@
 
 #include <QDockWidget>
 #include <QFile>
+#include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMainWindow>
+#include <QSet>
 #include <QTimer>
 
 #include <functional>
@@ -257,6 +259,92 @@ void save_hotkey_bindings(obs_hotkey_id id, const char *name)
   obs_data_array_release(bindings);
 }
 
+// ---- Atalho proprio para cada suite -----------------------------------
+// Assim a gravacao dispara a suite ativa e cada outra suite (inclusive as
+// mescladas) pode ser disparada por uma tecla diferente.
+
+QHash<QString, obs_hotkey_id> suite_hotkeys;
+QHash<obs_hotkey_id, QString> suite_hotkey_owner;
+QHash<QString, QString> suite_hotkey_labels;
+
+QByteArray suite_hotkey_config_name(const QString &suiteId)
+{
+  return QStringLiteral("obs-overlay-time-show.suite.%1").arg(suiteId).toUtf8();
+}
+
+void hotkey_run_suite_by_id(void *, obs_hotkey_id id, obs_hotkey_t *,
+                            bool pressed)
+{
+  if (!pressed)
+    return;
+  const QString suiteId = suite_hotkey_owner.value(id);
+  if (suiteId.isEmpty())
+    return;
+  runOnEngine(
+      [suiteId](SuiteEngine *engine) { engine->runSuiteById(suiteId); });
+}
+
+void drop_suite_hotkey(const QString &suiteId)
+{
+  const auto it = suite_hotkeys.constFind(suiteId);
+  if (it == suite_hotkeys.constEnd())
+    return;
+  const obs_hotkey_id id = it.value();
+  // Guarda a tecla antes de soltar o atalho, para nao perder o que o
+  // usuario configurou quando a suite so mudou de nome.
+  save_hotkey_bindings(id, suite_hotkey_config_name(suiteId).constData());
+  obs_hotkey_unregister(id);
+  suite_hotkey_owner.remove(id);
+  suite_hotkeys.remove(suiteId);
+  suite_hotkey_labels.remove(suiteId);
+}
+
+void sync_suite_hotkeys()
+{
+  if (!suiteStore)
+    return;
+
+  QSet<QString> alive;
+  for (const Suite &suite : suiteStore->suites())
+    alive.insert(suite.id);
+
+  const QList<QString> known = suite_hotkeys.keys();
+  for (const QString &suiteId : known) {
+    if (!alive.contains(suiteId))
+      drop_suite_hotkey(suiteId);
+  }
+
+  const QString pattern = QString::fromUtf8(
+      obs_module_text("OBSOverlayTimeShow.Hotkey.RunSuiteNamed"));
+
+  for (const Suite &suite : suiteStore->suites()) {
+    const QString label = pattern.contains(QLatin1String("%1"))
+                              ? pattern.arg(suite.name)
+                              : pattern + QLatin1Char(' ') + suite.name;
+    if (suite_hotkey_labels.value(suite.id) == label)
+      continue;
+
+    // Nome novo: registra de novo para o OBS mostrar o texto atualizado.
+    drop_suite_hotkey(suite.id);
+
+    const QByteArray configName = suite_hotkey_config_name(suite.id);
+    const obs_hotkey_id id = obs_hotkey_register_frontend(
+        configName.constData(), label.toUtf8().constData(),
+        hotkey_run_suite_by_id, nullptr);
+    if (id == OBS_INVALID_HOTKEY_ID) {
+      blog(LOG_WARNING,
+           "[obs-overlay-time-show] falha ao registrar atalho da suite %s",
+           suite.name.toUtf8().constData());
+      continue;
+    }
+
+    suite_hotkeys.insert(suite.id, id);
+    suite_hotkey_owner.insert(id, suite.id);
+    suite_hotkey_labels.insert(suite.id, label);
+    load_hotkey_bindings(id, configName.constData());
+  }
+}
+
 void load_all_hotkey_bindings()
 {
   load_hotkey_bindings(hotkey_up, kHotkeyNameUp);
@@ -264,6 +352,11 @@ void load_all_hotkey_bindings()
   load_hotkey_bindings(hotkey_left, kHotkeyNameLeft);
   load_hotkey_bindings(hotkey_right, kHotkeyNameRight);
   load_hotkey_bindings(hotkey_run_suite, kHotkeyNameRunSuite);
+  for (auto it = suite_hotkeys.constBegin(); it != suite_hotkeys.constEnd();
+       ++it) {
+    load_hotkey_bindings(it.value(),
+                         suite_hotkey_config_name(it.key()).constData());
+  }
 }
 
 void save_all_hotkey_bindings()
@@ -273,6 +366,11 @@ void save_all_hotkey_bindings()
   save_hotkey_bindings(hotkey_left, kHotkeyNameLeft);
   save_hotkey_bindings(hotkey_right, kHotkeyNameRight);
   save_hotkey_bindings(hotkey_run_suite, kHotkeyNameRunSuite);
+  for (auto it = suite_hotkeys.constBegin(); it != suite_hotkeys.constEnd();
+       ++it) {
+    save_hotkey_bindings(it.value(),
+                         suite_hotkey_config_name(it.key()).constData());
+  }
   config_t *config = obs_frontend_get_profile_config();
   if (config)
     config_save_safe(config, "tmp", nullptr);
@@ -349,12 +447,17 @@ void unregister_hotkeys()
   clear(hotkey_left);
   clear(hotkey_right);
   clear(hotkey_run_suite);
+
+  const QList<QString> suiteIds = suite_hotkeys.keys();
+  for (const QString &suiteId : suiteIds)
+    drop_suite_hotkey(suiteId);
 }
 
 void on_frontend_event(enum obs_frontend_event event, void *)
 {
   switch (event) {
   case OBS_FRONTEND_EVENT_FINISHED_LOADING:
+    sync_suite_hotkeys();
     load_all_hotkey_bindings();
     sync_overlay_state();
     register_suites_dock();
@@ -424,6 +527,10 @@ bool obs_module_load(void)
   load_overlay_position();
 
   register_hotkeys();
+  sync_suite_hotkeys();
+  // Suite criada, renomeada, mesclada ou apagada => atalhos acompanham.
+  QObject::connect(suiteStore, &SuiteStore::changed, suiteStore,
+                   []() { sync_suite_hotkeys(); });
   obs_frontend_add_save_callback(on_save, nullptr);
   obs_frontend_add_event_callback(on_frontend_event, nullptr);
 

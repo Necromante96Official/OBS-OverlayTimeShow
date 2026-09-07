@@ -161,6 +161,64 @@ Suite SuiteStore::duplicateSuite(const QString &id)
   return copy;
 }
 
+QString SuiteStore::suggestedMergeName(const QStringList &ids) const
+{
+  QStringList names;
+  for (const QString &id : ids) {
+    if (const Suite *suite = suiteById(id))
+      names.append(suite->name);
+  }
+  if (names.isEmpty())
+    return QStringLiteral("Nova suíte");
+  return names.join(QStringLiteral(" + "));
+}
+
+Suite SuiteStore::mergeSuites(const QStringList &ids, const QString &name,
+                              bool removeOriginals)
+{
+  QVector<SuiteStep> steps;
+  bool openFolder = false;
+  int found = 0;
+
+  for (const QString &id : ids) {
+    const Suite *suite = suiteById(id);
+    if (!suite)
+      continue;
+    ++found;
+    openFolder = openFolder || suite->openRecordingFolderOnStop;
+    steps.append(suite->steps);
+  }
+
+  if (found < 2)
+    return {};
+
+  Suite merged;
+  merged.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  merged.name = name.trimmed().isEmpty() ? suggestedMergeName(ids)
+                                         : name.trimmed();
+  merged.openRecordingFolderOnStop = openFolder;
+  merged.steps = steps;
+  m_suites.append(merged);
+
+  if (removeOriginals) {
+    for (const QString &id : ids) {
+      for (int i = 0; i < m_suites.size(); ++i) {
+        if (m_suites[i].id != id)
+          continue;
+        m_suites.removeAt(i);
+        break;
+      }
+    }
+  }
+
+  if (m_activeSuiteId.isEmpty() || !suiteById(m_activeSuiteId))
+    m_activeSuiteId = merged.id;
+
+  save();
+  emit changed();
+  return merged;
+}
+
 bool SuiteStore::setActiveSuite(const QString &id)
 {
   if (id.isEmpty()) {

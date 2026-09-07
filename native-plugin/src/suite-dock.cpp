@@ -4,6 +4,7 @@
 #include <obs-module.h>
 
 #include <QAbstractItemView>
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -18,12 +19,19 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
 namespace {
+
+QString stepCountText(int count)
+{
+  return count == 1 ? QObject::tr("1 passo")
+                    : QObject::tr("%1 passos").arg(count);
+}
 
 QString stepTypeLabel(SuiteStepType type)
 {
@@ -129,19 +137,31 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
   suitesLayout->setSpacing(6);
 
   auto *suitesHint = new QLabel(
-      tr("Só uma suíte fica ativa por vez. A suíte ativa é a que roda quando a "
-         "gravação começa."),
+      tr("Só uma suíte fica ativa por vez: é ela que roda quando a gravação "
+         "começa. Cada suíte também pode ter o seu próprio atalho de teclado, "
+         "para rodar quando você quiser."),
       suitesGroup);
   suitesHint->setWordWrap(true);
   suitesHint->setEnabled(false);
   suitesLayout->addWidget(suitesHint);
 
+  auto *mergeHint = new QLabel(
+      tr("Para juntar suítes: clique na primeira, segure Shift e clique na "
+         "última (ou use Ctrl para escolher uma a uma) e clique com o botão "
+         "direito em \"Mesclar\"."),
+      suitesGroup);
+  mergeHint->setWordWrap(true);
+  mergeHint->setEnabled(false);
+  suitesLayout->addWidget(mergeHint);
+
   auto *suiteRow = new QHBoxLayout();
   suiteRow->setSpacing(6);
   m_suiteList = new QListWidget(suitesGroup);
-  m_suiteList->setSelectionMode(QAbstractItemView::SingleSelection);
+  m_suiteList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  m_suiteList->setContextMenuPolicy(Qt::CustomContextMenu);
   m_suiteList->setToolTip(
-      tr("Clique duas vezes em uma suíte para ativá-la."));
+      tr("Clique duas vezes para ativar. Shift ou Ctrl marcam várias, e o botão "
+         "direito abre as opções."));
   suiteRow->addWidget(m_suiteList, 1);
 
   auto *suiteButtons = new QVBoxLayout();
@@ -155,6 +175,10 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
       tr("Cria uma cópia da suíte selecionada, com todos os passos."));
   m_removeBtn = new QPushButton(tr("Excluir"), suitesGroup);
   m_removeBtn->setToolTip(tr("Apaga a suíte selecionada."));
+  m_mergeBtn = new QPushButton(tr("Mesclar selecionadas"), suitesGroup);
+  m_mergeBtn->setToolTip(
+      tr("Junta os passos das suítes marcadas em uma suíte nova, na ordem da "
+         "lista."));
   m_activateBtn = new QPushButton(tr("Ativar esta suíte"), suitesGroup);
   m_activateBtn->setToolTip(
       tr("Torna a suíte selecionada a única ativa."));
@@ -165,6 +189,8 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
   suiteButtons->addWidget(m_renameBtn);
   suiteButtons->addWidget(m_duplicateBtn);
   suiteButtons->addWidget(m_removeBtn);
+  suiteButtons->addSpacing(10);
+  suiteButtons->addWidget(m_mergeBtn);
   suiteButtons->addSpacing(10);
   suiteButtons->addWidget(m_activateBtn);
   suiteButtons->addWidget(m_deactivateBtn);
@@ -211,7 +237,7 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
   m_downBtn = new QPushButton(tr("Mover para baixo"), stepsGroup);
   m_runBtn = new QPushButton(tr("Testar agora"), stepsGroup);
   m_runBtn->setToolTip(
-      tr("Executa os passos da suíte ativa imediatamente, sem gravar."));
+      tr("Executa agora os passos da suíte selecionada, sem precisar gravar."));
   stepButtons->addWidget(m_addStepBtn);
   stepButtons->addWidget(m_editStepBtn);
   stepButtons->addWidget(m_removeStepBtn);
@@ -223,8 +249,10 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
   root->addWidget(stepsGroup, 2);
 
   auto *footer = new QLabel(
-      tr("Atalho de teclado: Configurações → Atalhos → \"Suítes: executar a "
-         "suíte ativa\"."),
+      tr("Atalhos de teclado em Configurações → Atalhos: \"Suítes: executar a "
+         "suíte ativa\" e uma linha para cada suíte, no formato \"Suítes: "
+         "executar «nome»\". Assim uma tecla roda uma automação e outra tecla "
+         "roda outra."),
       this);
   footer->setWordWrap(true);
   footer->setEnabled(false);
@@ -240,6 +268,9 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
   connect(m_duplicateBtn, &QPushButton::clicked, this,
           &SuiteDock::onDuplicateSuite);
   connect(m_removeBtn, &QPushButton::clicked, this, &SuiteDock::onRemoveSuite);
+  connect(m_mergeBtn, &QPushButton::clicked, this, &SuiteDock::onMergeSelected);
+  connect(m_suiteList, &QListWidget::customContextMenuRequested, this,
+          &SuiteDock::onSuiteContextMenu);
   connect(m_activateBtn, &QPushButton::clicked, this,
           &SuiteDock::onActivateSelected);
   connect(m_deactivateBtn, &QPushButton::clicked, this,
@@ -267,6 +298,17 @@ QString SuiteDock::selectedSuiteId() const
   if (!item)
     return {};
   return item->data(Qt::UserRole).toString();
+}
+
+QStringList SuiteDock::selectedSuiteIds() const
+{
+  QStringList ids;
+  for (int i = 0; i < m_suiteList->count(); ++i) {
+    QListWidgetItem *item = m_suiteList->item(i);
+    if (item->isSelected())
+      ids.append(item->data(Qt::UserRole).toString());
+  }
+  return ids;
 }
 
 Suite *SuiteDock::selectedSuite()
@@ -303,6 +345,7 @@ void SuiteDock::updateButtonStates()
   m_renameBtn->setEnabled(hasSuite);
   m_duplicateBtn->setEnabled(hasSuite);
   m_removeBtn->setEnabled(hasSuite);
+  m_mergeBtn->setEnabled(selectedSuiteIds().size() >= 2);
   m_activateBtn->setEnabled(hasSuite);
   m_deactivateBtn->setEnabled(hasActive);
   m_openFolderCheck->setEnabled(hasSuite);
@@ -311,7 +354,7 @@ void SuiteDock::updateButtonStates()
   m_removeStepBtn->setEnabled(hasStep);
   m_upBtn->setEnabled(hasStep && stepRow > 0);
   m_downBtn->setEnabled(hasStep && stepRow < stepCount - 1);
-  m_runBtn->setEnabled(hasActive);
+  m_runBtn->setEnabled(hasSuite || hasActive);
 }
 
 void SuiteDock::refresh()
@@ -326,8 +369,11 @@ void SuiteDock::refresh()
 
   for (const Suite &suite : m_store->suites()) {
     const bool active = suite.id == m_store->activeSuiteId();
-    auto *item = new QListWidgetItem(
-        active ? tr("%1  —  ativa").arg(suite.name) : suite.name, m_suiteList);
+    QString text = tr("%1  —  %2")
+                       .arg(suite.name, stepCountText(suite.steps.size()));
+    if (active)
+      text += tr("  —  ativa");
+    auto *item = new QListWidgetItem(text, m_suiteList);
     item->setData(Qt::UserRole, suite.id);
     if (active) {
       QFont font = item->font();
@@ -460,6 +506,128 @@ void SuiteDock::onActivateSelected()
 void SuiteDock::onClearActive()
 {
   m_store->clearActiveSuite();
+}
+
+void SuiteDock::onMergeSelected()
+{
+  const QStringList ids = selectedSuiteIds();
+  if (ids.size() < 2) {
+    QMessageBox::information(
+        this, tr("Mesclar suítes"),
+        tr("Marque pelo menos duas suítes para mesclar.\n\nClique na primeira, "
+           "segure Shift e clique na última, ou use Ctrl para escolher uma a "
+           "uma."));
+    return;
+  }
+
+  QDialog dialog(this);
+  dialog.setWindowTitle(tr("Mesclar suítes"));
+  dialog.setMinimumWidth(430);
+  auto *layout = new QVBoxLayout(&dialog);
+  layout->setSpacing(10);
+
+  QStringList lines;
+  int total = 0;
+  for (int i = 0; i < ids.size(); ++i) {
+    const Suite *suite = m_store->suiteById(ids.at(i));
+    if (!suite)
+      continue;
+    total += suite->steps.size();
+    lines.append(tr("%1. %2 (%3)")
+                     .arg(i + 1)
+                     .arg(suite->name, stepCountText(suite->steps.size())));
+  }
+
+  auto *orderLabel = new QLabel(
+      tr("Os passos entram nesta ordem, um depois do outro:\n\n%1\n\nTotal: %2.")
+          .arg(lines.join(QStringLiteral("\n")), stepCountText(total)),
+      &dialog);
+  orderLabel->setWordWrap(true);
+  layout->addWidget(orderLabel);
+
+  auto *conditionHint = new QLabel(
+      tr("Atenção com as condições: uma condição só afeta o passo logo abaixo "
+         "dela. Depois de mesclar, uma condição que estava no fim de uma suíte "
+         "passa a valer para o primeiro passo da suíte seguinte."),
+      &dialog);
+  conditionHint->setWordWrap(true);
+  conditionHint->setEnabled(false);
+  layout->addWidget(conditionHint);
+
+  auto *form = new QFormLayout();
+  auto *nameEdit = new QLineEdit(m_store->suggestedMergeName(ids), &dialog);
+  form->addRow(new QLabel(tr("Nome da suíte mesclada:"), &dialog), nameEdit);
+  layout->addLayout(form);
+
+  auto *activateCheck =
+      new QCheckBox(tr("Ativar a suíte mesclada (ela roda ao gravar)"), &dialog);
+  activateCheck->setChecked(true);
+  layout->addWidget(activateCheck);
+
+  auto *removeCheck = new QCheckBox(
+      tr("Excluir as suítes originais depois de mesclar"), &dialog);
+  removeCheck->setToolTip(
+      tr("Deixe desmarcado para manter as suítes separadas e ainda ter a "
+         "mesclada."));
+  layout->addWidget(removeCheck);
+
+  auto *buttons = new QDialogButtonBox(
+      QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  buttons->button(QDialogButtonBox::Ok)->setText(tr("Mesclar"));
+  buttons->button(QDialogButtonBox::Cancel)->setText(tr("Cancelar"));
+  layout->addWidget(buttons);
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+  if (dialog.exec() != QDialog::Accepted)
+    return;
+
+  const Suite merged =
+      m_store->mergeSuites(ids, nameEdit->text(), removeCheck->isChecked());
+  if (merged.id.isEmpty()) {
+    QMessageBox::warning(this, tr("Mesclar suítes"),
+                         tr("Não foi possível mesclar as suítes escolhidas."));
+    return;
+  }
+
+  if (activateCheck->isChecked())
+    m_store->setActiveSuite(merged.id);
+
+  refresh();
+  selectSuiteById(merged.id);
+}
+
+void SuiteDock::onSuiteContextMenu(const QPoint &pos)
+{
+  const QStringList ids = selectedSuiteIds();
+  QMenu menu(this);
+
+  QAction *activate = menu.addAction(tr("Ativar esta suíte"));
+  activate->setEnabled(ids.size() == 1);
+  connect(activate, &QAction::triggered, this, &SuiteDock::onActivateSelected);
+
+  QAction *merge = menu.addAction(
+      ids.size() >= 2
+          ? tr("Mesclar as %1 suítes marcadas...").arg(ids.size())
+          : tr("Mesclar suítes marcadas (marque duas ou mais)..."));
+  merge->setEnabled(ids.size() >= 2);
+  connect(merge, &QAction::triggered, this, &SuiteDock::onMergeSelected);
+
+  menu.addSeparator();
+
+  QAction *rename = menu.addAction(tr("Renomear..."));
+  rename->setEnabled(ids.size() == 1);
+  connect(rename, &QAction::triggered, this, &SuiteDock::onRenameSuite);
+
+  QAction *duplicate = menu.addAction(tr("Duplicar"));
+  duplicate->setEnabled(ids.size() == 1);
+  connect(duplicate, &QAction::triggered, this, &SuiteDock::onDuplicateSuite);
+
+  QAction *remove = menu.addAction(tr("Excluir"));
+  remove->setEnabled(ids.size() == 1);
+  connect(remove, &QAction::triggered, this, &SuiteDock::onRemoveSuite);
+
+  menu.exec(m_suiteList->viewport()->mapToGlobal(pos));
 }
 
 void SuiteDock::onOpenFolderToggled(bool checked)
@@ -863,6 +1031,11 @@ void SuiteDock::onMoveStepDown()
 
 void SuiteDock::onRunNow()
 {
-  if (m_engine)
+  if (!m_engine)
+    return;
+  const QString id = selectedSuiteId();
+  if (id.isEmpty())
     m_engine->runActiveNow();
+  else
+    m_engine->runSuiteById(id);
 }
