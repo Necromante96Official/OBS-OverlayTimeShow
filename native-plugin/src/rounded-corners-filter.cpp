@@ -123,15 +123,29 @@ struct FilterData {
   int cropTop = 0;
   int cropBottom = 0;
 
-  // Deteccao das tarjas preta da propria imagem.
+  // Deteccao das tarjas preta da propria imagem. A medida vale em pixels e
+  // define o tamanho de saida do filtro, por isso ela e feita numa rodada de
+  // amostras no comeco e depois congela: mudar o tamanho da fonte a toda hora
+  // faz o OBS reposicionar o item da cena, e a imagem parece andar sozinha.
   bool autoCrop = false;
   int blackLevel = 24;
   int autoLeft = 0;
   int autoRight = 0;
   int autoTop = 0;
   int autoBottom = 0;
+  // Menor recorte visto na rodada atual, para nunca comer imagem de verdade.
+  int pendingLeft = 0;
+  int pendingRight = 0;
+  int pendingTop = 0;
+  int pendingBottom = 0;
+  int pendingCount = 0;
+  int measuresLeft = 0;
+  int roundsLeft = 0;
+  float measureGap = 0.0f;
+  float sinceMeasure = 0.0f;
   bool needsDetect = false;
-  float sinceDetect = 0.0f;
+  uint32_t lastBaseWidth = 0;
+  uint32_t lastBaseHeight = 0;
   gs_texrender_t *sampleRender = nullptr;
   gs_stagesurf_t *sampleSurface = nullptr;
   uint32_t sampleWidth = 0;
@@ -144,9 +158,29 @@ struct FilterData {
   struct vec2 uvOffset = {0.0f, 0.0f};
 };
 
+// Amostras de uma rodada e o intervalo entre elas. Varias medidas seguidas
+// tiram o efeito de um quadro ruim, e o resultado so e aplicado no fim da
+// rodada: assim o tamanho da fonte muda uma vez, e nao a cada medida.
+constexpr int kMeasuresPerRound = 5;
+constexpr float kMeasureGap = 0.3f;
+// Sem imagem util (camera ainda ligando, sala escura), tenta de novo com
+// calma, ate desistir.
+constexpr float kRetryGap = 3.0f;
+constexpr int kMaxRetryRounds = 20;
+
 const char *filter_get_name(void *)
 {
   return obs_module_text("OBSOverlayTimeShow.Filter.RoundedCorners");
+}
+
+void start_measuring(FilterData *filter, float gap, int rounds)
+{
+  filter->pendingCount = 0;
+  filter->measuresLeft = kMeasuresPerRound;
+  filter->roundsLeft = rounds;
+  filter->measureGap = gap;
+  filter->sinceMeasure = 0.0f;
+  filter->needsDetect = false;
 }
 
 void filter_update(void *data, obs_data_t *settings)
@@ -174,9 +208,8 @@ void filter_update(void *data, obs_data_t *settings)
   filter->blackLevel =
       static_cast<int>(obs_data_get_int(settings, kSettingBlackLevel));
   if (autoCrop) {
-    // Ligar (ou mexer no nivel de preto) refaz a medida no proximo quadro.
-    filter->needsDetect = true;
-    filter->sinceDetect = 0.0f;
+    // Ligar (ou mexer no nivel de preto) refaz a medida.
+    start_measuring(filter, kMeasureGap, kMaxRetryRounds);
   } else if (filter->autoCrop) {
     filter->autoLeft = 0;
     filter->autoRight = 0;
@@ -189,11 +222,10 @@ void filter_update(void *data, obs_data_t *settings)
 // Renderiza uma amostra pequena da fonte, le de volta na CPU e acha a caixa
 // com imagem de verdade. Amostra reduzida porque para achar tarja preta nao
 // precisa de resolucao cheia, e a leitura da GPU e caro.
-void detect_black_borders(FilterData *filter, obs_source_t *target,
-                         uint32_t baseWidth, uint32_t baseHeight)
+bool detect_black_borders(FilterData *filter, obs_source_t *target,
+                          uint32_t baseWidth, uint32_t baseHeight, int *outLeft,
+                          int *outRight, int *outTop, int *outBottom)
 {
-  filter->needsDetect = false;
-
   constexpr uint32_t kMaxSide = 256;
   uint32_t sampleW = baseWidth;
   uint32_t sampleH = baseHeight;
@@ -215,11 +247,11 @@ void detect_black_borders(FilterData *filter, obs_source_t *target,
     filter->sampleHeight = sampleH;
   }
   if (!filter->sampleRender || !filter->sampleSurface)
-    return;
+    return false;
 
   gs_texrender_reset(filter->sampleRender);
   if (!gs_texrender_begin(filter->sampleRender, sampleW, sampleH))
-    return;
+    return false;
 
   struct vec4 clear;
   vec4_zero(&clear);
@@ -238,7 +270,7 @@ void detect_black_borders(FilterData *filter, obs_source_t *target,
   uint8_t *pixels = nullptr;
   uint32_t linesize = 0;
   if (!gs_stagesurface_map(filter->sampleSurface, &pixels, &linesize))
-    return;
+    return false;
 
   std::vector<int> columnHits(sampleW, 0);
   std::vector<int> rowHits(sampleH, 0);
@@ -279,13 +311,13 @@ void detect_black_borders(FilterData *filter, obs_source_t *target,
   bounds(columnHits, minColumn, &firstCol, &lastCol);
   bounds(rowHits, minRow, &firstRow, &lastRow);
   if (firstCol < 0 || firstRow < 0)
-    return; // Quadro todo escuro: mantem a medida anterior.
+    return false; // Quadro todo escuro: nao serve de medida.
 
   const int litW = lastCol - firstCol + 1;
   const int litH = lastRow - firstRow + 1;
   if (litW * 10 < static_cast<int>(sampleW) ||
       litH * 10 < static_cast<int>(sampleH)) {
-    return; // Sobrou muito pouco: provavelmente a cena so esta escura.
+    return false; // Sobrou muito pouco: provavelmente a cena so esta escura.
   }
 
   const float scaleX = static_cast<float>(baseWidth) /
@@ -303,10 +335,28 @@ void detect_black_borders(FilterData *filter, obs_source_t *target,
 
   const int maxX = static_cast<int>(baseWidth) / 2 - 4;
   const int maxY = static_cast<int>(baseHeight) / 2 - 4;
-  filter->autoLeft = std::clamp(left > 0 ? left + kInset : 0, 0, maxX);
-  filter->autoRight = std::clamp(right > 0 ? right + kInset : 0, 0, maxX);
-  filter->autoTop = std::clamp(top > 0 ? top + kInset : 0, 0, maxY);
-  filter->autoBottom = std::clamp(bottom > 0 ? bottom + kInset : 0, 0, maxY);
+  *outLeft = std::clamp(left > 0 ? left + kInset : 0, 0, maxX);
+  *outRight = std::clamp(right > 0 ? right + kInset : 0, 0, maxX);
+  *outTop = std::clamp(top > 0 ? top + kInset : 0, 0, maxY);
+  *outBottom = std::clamp(bottom > 0 ? bottom + kInset : 0, 0, maxY);
+  return true;
+}
+
+// Fecha a rodada: aplica o menor recorte visto. Diferenca de poucos pixels
+// nao vale trocar o tamanho da fonte, senao a imagem da um pulinho a toa.
+void commit_measurement(FilterData *filter)
+{
+  auto same = [](int a, int b) { return std::abs(a - b) <= 2; };
+  if (same(filter->autoLeft, filter->pendingLeft) &&
+      same(filter->autoRight, filter->pendingRight) &&
+      same(filter->autoTop, filter->pendingTop) &&
+      same(filter->autoBottom, filter->pendingBottom)) {
+    return;
+  }
+  filter->autoLeft = filter->pendingLeft;
+  filter->autoRight = filter->pendingRight;
+  filter->autoTop = filter->pendingTop;
+  filter->autoBottom = filter->pendingBottom;
 }
 
 // O tamanho da fonte so e confiavel no tick, por isso o recorte e o mapeamento
@@ -323,13 +373,22 @@ void filter_tick(void *data, float seconds)
     return;
   }
 
-  // Remede de vez em quando: se a camera girar ou trocar de modo, a tarja
-  // muda de lugar e o recorte se ajusta sozinho.
+  // A medida so acontece numa rodada: no comeco, quando a fonte troca de
+  // resolucao, ou quando o usuario mexe nas opcoes. Fora disso o recorte fica
+  // parado, senao o tamanho da fonte muda sozinho e o item anda na cena.
   if (filter->autoCrop) {
-    filter->sinceDetect += seconds;
-    if (filter->sinceDetect >= 2.0f) {
-      filter->sinceDetect = 0.0f;
-      filter->needsDetect = true;
+    if (baseWidth != filter->lastBaseWidth ||
+        baseHeight != filter->lastBaseHeight) {
+      filter->lastBaseWidth = baseWidth;
+      filter->lastBaseHeight = baseHeight;
+      start_measuring(filter, kMeasureGap, kMaxRetryRounds);
+    }
+    if (filter->measuresLeft > 0) {
+      filter->sinceMeasure += seconds;
+      if (filter->sinceMeasure >= filter->measureGap) {
+        filter->sinceMeasure = 0.0f;
+        filter->needsDetect = true;
+      }
     }
   }
 
@@ -545,10 +604,39 @@ void filter_render(void *data, gs_effect_t *)
 
   obs_source_t *target = obs_filter_get_target(filter->context);
   if (filter->needsDetect && target) {
+    filter->needsDetect = false;
     const uint32_t baseWidth = obs_source_get_base_width(target);
     const uint32_t baseHeight = obs_source_get_base_height(target);
-    if (baseWidth && baseHeight)
-      detect_black_borders(filter, target, baseWidth, baseHeight);
+    int left = 0, right = 0, top = 0, bottom = 0;
+    const bool measured =
+        baseWidth && baseHeight &&
+        detect_black_borders(filter, target, baseWidth, baseHeight, &left,
+                             &right, &top, &bottom);
+    if (measured) {
+      // Fica com o menor recorte da rodada: melhor sobrar tarja do que comer
+      // um pedaco da imagem por causa de um quadro escuro.
+      if (filter->pendingCount == 0) {
+        filter->pendingLeft = left;
+        filter->pendingRight = right;
+        filter->pendingTop = top;
+        filter->pendingBottom = bottom;
+      } else {
+        filter->pendingLeft = std::min(filter->pendingLeft, left);
+        filter->pendingRight = std::min(filter->pendingRight, right);
+        filter->pendingTop = std::min(filter->pendingTop, top);
+        filter->pendingBottom = std::min(filter->pendingBottom, bottom);
+      }
+      ++filter->pendingCount;
+    }
+
+    if (filter->measuresLeft > 0)
+      --filter->measuresLeft;
+    if (filter->measuresLeft == 0) {
+      if (filter->pendingCount > 0)
+        commit_measurement(filter);
+      else if (filter->roundsLeft > 0)
+        start_measuring(filter, kRetryGap, filter->roundsLeft - 1);
+    }
   }
 
   const uint32_t width = filter->width;

@@ -16,6 +16,8 @@ class QListWidgetItem;
 class QPushButton;
 class QShowEvent;
 class QSpinBox;
+class QTabBar;
+class QTabWidget;
 
 class SuiteDock : public QWidget {
   Q_OBJECT
@@ -96,7 +98,11 @@ private:
   SuiteStore *m_store = nullptr;
   SuiteEngine *m_engine = nullptr;
 
-  QListWidget *m_suiteList = nullptr;
+  // Cada aba é uma suíte; as abas de conteúdo abaixo mostram os passos, as
+  // opções de gravação e a câmera, uma coisa por vez.
+  QTabBar *m_suiteTabs = nullptr;
+  QTabWidget *m_pages = nullptr;
+  QLabel *m_stepsHeader = nullptr;
   QListWidget *m_stepList = nullptr;
   QCheckBox *m_openFolderCheck = nullptr;
   QCheckBox *m_runOnStartCheck = nullptr;

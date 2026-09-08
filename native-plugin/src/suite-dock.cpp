@@ -16,7 +16,7 @@
 #include <QFormLayout>
 #include <QFrame>
 #include <QGridLayout>
-#include <QGroupBox>
+#include <QTabBar>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QItemSelectionModel>
@@ -28,6 +28,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QTimer>
 #include <QUuid>
 #include <QVBoxLayout>
@@ -189,106 +190,54 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
     : QWidget(parent), m_store(store), m_engine(engine)
 {
   auto *root = new QVBoxLayout(this);
-  root->setContentsMargins(6, 6, 6, 6);
-  root->setSpacing(6);
+  root->setContentsMargins(4, 4, 4, 4);
+  root->setSpacing(4);
 
-  m_activeLabel = new QLabel(this);
-  QFont activeFont = m_activeLabel->font();
-  activeFont.setBold(true);
-  m_activeLabel->setFont(activeFont);
-  m_activeLabel->setWordWrap(true);
-  root->addWidget(m_activeLabel);
+  // ---- Seletor da suíte (o "pai"), sempre visível ----------------------
+  auto *suiteRow = new QHBoxLayout();
+  suiteRow->setSpacing(4);
 
-  // ---- Suítes ----------------------------------------------------------
-  auto *suitesGroup = new QGroupBox(tr("Suítes"), this);
-  auto *suitesLayout = new QVBoxLayout(suitesGroup);
-  suitesLayout->setContentsMargins(8, 6, 8, 8);
-  suitesLayout->setSpacing(5);
+  m_suiteTabs = new QTabBar(this);
+  m_suiteTabs->setExpanding(false);
+  m_suiteTabs->setUsesScrollButtons(true);
+  m_suiteTabs->setElideMode(Qt::ElideRight);
+  m_suiteTabs->setDrawBase(false);
+  m_suiteTabs->setDocumentMode(true);
+  m_suiteTabs->setContextMenuPolicy(Qt::CustomContextMenu);
+  m_suiteTabs->setToolTip(
+      tr("Uma aba por suíte. A aba escolhida manda no que aparece abaixo. "
+         "Clique duas vezes para ativar a suíte; o botão direito abre as "
+         "opções."));
+  suiteRow->addWidget(m_suiteTabs, 1);
 
-  m_suiteList = new QListWidget(suitesGroup);
-  m_suiteList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-  m_suiteList->setContextMenuPolicy(Qt::CustomContextMenu);
-  m_suiteList->setWordWrap(true);
-  m_suiteList->setTextElideMode(Qt::ElideNone);
-  m_suiteList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  m_suiteList->setUniformItemSizes(false);
-  m_suiteList->setSpacing(1);
-  m_suiteList->setMinimumHeight(90);
-  m_suiteList->setToolTip(
-      tr("Clique duas vezes para ativar a suíte. Shift ou Ctrl marcam várias "
-         "para mesclar. O botão direito abre as opções."));
-  suitesLayout->addWidget(m_suiteList, 1);
+  auto *addBtn = new QPushButton(tr("+ Nova suíte"), this);
+  addBtn->setToolTip(
+      tr("Cria uma suíte nova, que é o \"pai\". Depois de criada, use a aba "
+         "Passos para montar a automação dentro dela."));
+  suiteRow->addWidget(addBtn);
+  root->addLayout(suiteRow);
 
-  auto *suiteButtons = new QGridLayout();
-  suiteButtons->setSpacing(4);
-  auto *addBtn = new QPushButton(tr("Nova"), suitesGroup);
-  addBtn->setToolTip(tr("Cria uma suíte vazia."));
-  m_renameBtn = new QPushButton(tr("Renomear"), suitesGroup);
-  m_renameBtn->setToolTip(tr("Muda o nome da suíte selecionada."));
-  m_duplicateBtn = new QPushButton(tr("Duplicar"), suitesGroup);
-  m_duplicateBtn->setToolTip(
-      tr("Cria uma cópia da suíte selecionada, com todos os passos."));
-  m_removeBtn = new QPushButton(tr("Excluir"), suitesGroup);
-  m_removeBtn->setToolTip(tr("Apaga a suíte selecionada."));
-  m_activateBtn = new QPushButton(tr("Ativar"), suitesGroup);
-  m_activateBtn->setToolTip(
-      tr("Torna a suíte selecionada a única ativa: é ela que roda ao gravar."));
-  m_deactivateBtn = new QPushButton(tr("Desativar"), suitesGroup);
-  m_deactivateBtn->setToolTip(
-      tr("Nenhuma suíte roda ao iniciar a gravação."));
-  m_mergeBtn = new QPushButton(tr("Mesclar..."), suitesGroup);
-  m_mergeBtn->setToolTip(
-      tr("Junta os passos de várias suítes em uma suíte nova."));
-  suiteButtons->addWidget(addBtn, 0, 0);
-  suiteButtons->addWidget(m_renameBtn, 0, 1);
-  suiteButtons->addWidget(m_duplicateBtn, 0, 2);
-  suiteButtons->addWidget(m_removeBtn, 0, 3);
-  suiteButtons->addWidget(m_activateBtn, 1, 0);
-  suiteButtons->addWidget(m_deactivateBtn, 1, 1);
-  suiteButtons->addWidget(m_mergeBtn, 1, 2, 1, 2);
-  suitesLayout->addLayout(suiteButtons);
-  root->addWidget(suitesGroup, 1);
+  // ---- Conteúdo em abas, uma coisa por vez -----------------------------
+  auto *pages = new QTabWidget(this);
+  pages->setDocumentMode(true);
+  m_pages = pages;
 
-  // ---- Passos ----------------------------------------------------------
-  auto *stepsGroup = new QGroupBox(tr("Suíte selecionada"), this);
-  auto *stepsLayout = new QVBoxLayout(stepsGroup);
-  stepsLayout->setContentsMargins(8, 6, 8, 8);
-  stepsLayout->setSpacing(5);
+  auto *stepsPage = new QWidget(pages);
+  auto *stepsLayout = new QVBoxLayout(stepsPage);
+  stepsLayout->setContentsMargins(6, 6, 6, 6);
+  stepsLayout->setSpacing(4);
 
-  auto *whenRow = new QHBoxLayout();
-  whenRow->setSpacing(10);
-  m_runOnStartCheck =
-      new QCheckBox(tr("Rodar ao iniciar a gravação"), stepsGroup);
-  m_runOnStartCheck->setToolTip(
-      tr("Quando você aperta para gravar (pelo OBS ou pela tecla de atalho da "
-         "gravação), esta suíte roda."));
-  m_runOnStopCheck =
-      new QCheckBox(tr("Rodar ao encerrar a gravação"), stepsGroup);
-  m_runOnStopCheck->setToolTip(
-      tr("Quando a gravação para, esta suíte roda de novo. Use a condição "
-         "\"o que disparou a suíte\" para separar o que acontece em cada "
-         "momento."));
-  whenRow->addWidget(m_runOnStartCheck);
-  whenRow->addWidget(m_runOnStopCheck);
-  whenRow->addStretch(1);
-  stepsLayout->addLayout(whenRow);
+  m_stepsHeader = new QLabel(stepsPage);
+  QFont headerFont = m_stepsHeader->font();
+  headerFont.setBold(true);
+  m_stepsHeader->setFont(headerFont);
+  m_stepsHeader->setWordWrap(true);
+  m_stepsHeader->setToolTip(
+      tr("Os passos abaixo pertencem a esta suíte e rodam de cima para "
+         "baixo."));
+  stepsLayout->addWidget(m_stepsHeader);
 
-  m_openFolderCheck = new QCheckBox(
-      tr("Ao terminar a gravação, abrir a pasta do arquivo"), stepsGroup);
-  m_openFolderCheck->setToolTip(
-      tr("Ao parar a gravação, o Windows abre a pasta e seleciona o arquivo que "
-         "acabou de ser salvo."));
-  stepsLayout->addWidget(m_openFolderCheck);
-
-  auto *stepsHint = new QLabel(
-      tr("Passos, executados de cima para baixo. Marque vários com Shift e "
-         "use \"Mesclar\" para virarem um grupo."),
-      stepsGroup);
-  stepsHint->setWordWrap(true);
-  stepsHint->setEnabled(false);
-  stepsLayout->addWidget(stepsHint);
-
-  m_stepList = new QListWidget(stepsGroup);
+  m_stepList = new QListWidget(stepsPage);
   // Selecao multipla: e assim que se marcam os passos para mesclar.
   m_stepList->setSelectionMode(QAbstractItemView::ExtendedSelection);
   m_stepList->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -299,62 +248,125 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
   m_stepList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   m_stepList->setUniformItemSizes(false);
   m_stepList->setSpacing(2);
-  m_stepList->setMinimumHeight(120);
-  m_stepList->setToolTip(tr("Clique duas vezes em um passo para editá-lo."));
+  m_stepList->setMinimumHeight(140);
+  m_stepList->setToolTip(
+      tr("Clique duas vezes em um passo para editá-lo. Marque vários com "
+         "Shift e use \"Mesclar\" para virarem um grupo."));
   m_stepList->viewport()->installEventFilter(this);
   stepsLayout->addWidget(m_stepList, 1);
 
   auto *stepButtons = new QGridLayout();
   stepButtons->setSpacing(4);
-  m_addStepBtn = new QPushButton(tr("Adicionar"), stepsGroup);
+  m_addStepBtn = new QPushButton(tr("Adicionar"), stepsPage);
   m_addStepBtn->setToolTip(tr("Adiciona um passo no fim da lista."));
-  m_editStepBtn = new QPushButton(tr("Editar"), stepsGroup);
+  m_editStepBtn = new QPushButton(tr("Editar"), stepsPage);
   m_editStepBtn->setToolTip(tr("Abre o passo selecionado para mudar."));
-  m_removeStepBtn = new QPushButton(tr("Remover"), stepsGroup);
+  m_removeStepBtn = new QPushButton(tr("Remover"), stepsPage);
   m_removeStepBtn->setToolTip(tr("Apaga o passo selecionado."));
-  m_upBtn = new QPushButton(tr("↑ Subir"), stepsGroup);
+  m_upBtn = new QPushButton(tr("↑"), stepsPage);
   m_upBtn->setToolTip(tr("Move o passo selecionado uma posição para cima."));
-  m_downBtn = new QPushButton(tr("↓ Descer"), stepsGroup);
+  m_downBtn = new QPushButton(tr("↓"), stepsPage);
   m_downBtn->setToolTip(tr("Move o passo selecionado uma posição para baixo."));
-  m_mergeStepsBtn = new QPushButton(tr("Mesclar"), stepsGroup);
+  m_mergeStepsBtn = new QPushButton(tr("Mesclar"), stepsPage);
   m_mergeStepsBtn->setToolTip(
       tr("Junta os passos marcados em um grupo: eles ficam lado a lado e uma "
          "condição antes do grupo vale para todos."));
-  m_unmergeStepsBtn = new QPushButton(tr("Desmesclar"), stepsGroup);
+  m_unmergeStepsBtn = new QPushButton(tr("Desmesclar"), stepsPage);
   m_unmergeStepsBtn->setToolTip(
       tr("Desfaz o grupo e devolve as ações como passos soltos."));
-  m_runBtn = new QPushButton(tr("Testar agora"), stepsGroup);
+  m_runBtn = new QPushButton(tr("Testar agora"), stepsPage);
   m_runBtn->setToolTip(
       tr("Executa agora os passos da suíte selecionada, sem precisar gravar."));
   stepButtons->addWidget(m_addStepBtn, 0, 0);
   stepButtons->addWidget(m_editStepBtn, 0, 1);
   stepButtons->addWidget(m_removeStepBtn, 0, 2);
-  stepButtons->addWidget(m_upBtn, 1, 0);
-  stepButtons->addWidget(m_downBtn, 1, 1);
-  stepButtons->addWidget(m_runBtn, 1, 2);
+  stepButtons->addWidget(m_upBtn, 0, 3);
+  stepButtons->addWidget(m_downBtn, 0, 4);
+  stepButtons->addWidget(m_mergeStepsBtn, 1, 0);
+  stepButtons->addWidget(m_unmergeStepsBtn, 1, 1);
+  stepButtons->addWidget(m_runBtn, 1, 2, 1, 3);
+  stepsLayout->addLayout(stepButtons);
+  pages->addTab(stepsPage, tr("Passos"));
+
+  // ---- Aba da suíte: gravação e organização ----------------------------
+  auto *suitePage = new QWidget(pages);
+  auto *suiteLayout = new QVBoxLayout(suitePage);
+  suiteLayout->setContentsMargins(6, 6, 6, 6);
+  suiteLayout->setSpacing(4);
+
+  m_activeLabel = new QLabel(suitePage);
+  m_activeLabel->setWordWrap(true);
+  m_activeLabel->setEnabled(false);
+  suiteLayout->addWidget(m_activeLabel);
+
+  m_runOnStartCheck = new QCheckBox(tr("Rodar ao iniciar a gravação"), suitePage);
+  m_runOnStartCheck->setToolTip(
+      tr("Quando você aperta para gravar (pelo OBS ou pela tecla de atalho da "
+         "gravação), esta suíte roda."));
+  m_runOnStopCheck =
+      new QCheckBox(tr("Rodar ao encerrar a gravação"), suitePage);
+  m_runOnStopCheck->setToolTip(
+      tr("Quando a gravação para, esta suíte roda de novo. Use a condição "
+         "\"o que disparou a suíte\" para separar o que acontece em cada "
+         "momento."));
+  m_openFolderCheck =
+      new QCheckBox(tr("Abrir a pasta do arquivo ao terminar"), suitePage);
+  m_openFolderCheck->setToolTip(
+      tr("Ao parar a gravação, o Windows abre a pasta e seleciona o arquivo que "
+         "acabou de ser salvo."));
+  suiteLayout->addWidget(m_runOnStartCheck);
+  suiteLayout->addWidget(m_runOnStopCheck);
+  suiteLayout->addWidget(m_openFolderCheck);
+
   m_stopWithOutroBtn =
-      new QPushButton(tr("Encerrar gravação com transição"), stepsGroup);
+      new QPushButton(tr("Encerrar gravação com transição"), suitePage);
   m_stopWithOutroBtn->setToolTip(
       tr("Roda o grupo de encerramento, espera as transições terminarem e só "
          "então encerra a gravação, para o esmaecer entrar no arquivo. O botão "
          "de parar do próprio OBS fecha o arquivo na hora e não dá tempo para "
          "isso."));
-  stepButtons->addWidget(m_mergeStepsBtn, 2, 0);
-  stepButtons->addWidget(m_unmergeStepsBtn, 2, 1, 1, 2);
-  m_outroKeyBtn = new QPushButton(tr("Atalho de parada..."), stepsGroup);
+  m_outroKeyBtn = new QPushButton(tr("Atalho de parada..."), suitePage);
   m_outroKeyBtn->setToolTip(
       tr("Passa a sua tecla de parar gravação do OBS para o encerramento "
          "suave, para você continuar usando a mesma tecla de sempre."));
-  stepButtons->addWidget(m_stopWithOutroBtn, 3, 0, 1, 2);
-  stepButtons->addWidget(m_outroKeyBtn, 3, 2);
-  stepsLayout->addLayout(stepButtons);
-  root->addWidget(stepsGroup, 2);
+  auto *outroRow = new QHBoxLayout();
+  outroRow->setSpacing(4);
+  outroRow->addWidget(m_stopWithOutroBtn, 1);
+  outroRow->addWidget(m_outroKeyBtn);
+  suiteLayout->addLayout(outroRow);
 
-  // ---- Posição da câmera ----------------------------------------------
-  auto *cameraGroup = new QGroupBox(tr("Posição da câmera"), this);
+  auto *manageButtons = new QGridLayout();
+  manageButtons->setSpacing(4);
+  m_activateBtn = new QPushButton(tr("Ativar"), suitePage);
+  m_activateBtn->setToolTip(
+      tr("Torna a suíte escolhida a única ativa: é ela que roda ao gravar."));
+  m_deactivateBtn = new QPushButton(tr("Desativar"), suitePage);
+  m_deactivateBtn->setToolTip(tr("Nenhuma suíte roda ao iniciar a gravação."));
+  m_renameBtn = new QPushButton(tr("Renomear"), suitePage);
+  m_renameBtn->setToolTip(tr("Muda o nome da suíte escolhida."));
+  m_duplicateBtn = new QPushButton(tr("Duplicar"), suitePage);
+  m_duplicateBtn->setToolTip(
+      tr("Cria uma cópia da suíte escolhida, com todos os passos."));
+  m_removeBtn = new QPushButton(tr("Excluir"), suitePage);
+  m_removeBtn->setToolTip(tr("Apaga a suíte escolhida."));
+  m_mergeBtn = new QPushButton(tr("Mesclar..."), suitePage);
+  m_mergeBtn->setToolTip(
+      tr("Junta os passos de várias suítes em uma suíte nova."));
+  manageButtons->addWidget(m_activateBtn, 0, 0);
+  manageButtons->addWidget(m_deactivateBtn, 0, 1);
+  manageButtons->addWidget(m_renameBtn, 0, 2);
+  manageButtons->addWidget(m_duplicateBtn, 1, 0);
+  manageButtons->addWidget(m_removeBtn, 1, 1);
+  manageButtons->addWidget(m_mergeBtn, 1, 2);
+  suiteLayout->addLayout(manageButtons);
+  suiteLayout->addStretch(1);
+  pages->addTab(suitePage, tr("Suíte"));
+
+  // ---- Aba da câmera ---------------------------------------------------
+  auto *cameraGroup = new QWidget(pages);
   auto *cameraLayout = new QVBoxLayout(cameraGroup);
-  cameraLayout->setContentsMargins(8, 6, 8, 8);
-  cameraLayout->setSpacing(5);
+  cameraLayout->setContentsMargins(6, 6, 6, 6);
+  cameraLayout->setSpacing(4);
 
   auto *cameraTop = new QHBoxLayout();
   cameraTop->setSpacing(4);
@@ -421,32 +433,36 @@ SuiteDock::SuiteDock(SuiteStore *store, SuiteEngine *engine, QWidget *parent)
       tr("Desmarcado, muda só na cena atual. Marcado, a câmera vai para o "
          "mesmo canto em todas as cenas onde ela aparece."));
   cameraLayout->addWidget(m_cameraAllScenesCheck);
-  root->addWidget(cameraGroup);
 
-  auto *footer = new QLabel(
-      tr("Atalhos: Configurações → Atalhos, uma linha por suíte e uma por "
-         "canto da câmera."),
-      this);
-  footer->setWordWrap(true);
-  footer->setEnabled(false);
-  footer->setToolTip(
-      tr("Além de \"Suítes: executar a suíte ativa\", cada suíte tem a sua "
-         "própria linha, no formato \"Suítes: executar «nome»\". Assim uma "
-         "tecla roda uma automação e outra tecla roda outra."));
-  root->addWidget(footer);
+  auto *cameraHint = new QLabel(
+      tr("Atalhos: Configurações → Atalhos, uma linha por canto e uma para "
+         "girar."),
+      cameraGroup);
+  cameraHint->setWordWrap(true);
+  cameraHint->setEnabled(false);
+  cameraLayout->addWidget(cameraHint);
+  cameraLayout->addStretch(1);
+  pages->addTab(cameraGroup, tr("Câmera"));
+
+  root->addWidget(pages, 1);
 
   connect(m_store, &SuiteStore::changed, this, &SuiteDock::refresh);
-  connect(m_suiteList, &QListWidget::itemSelectionChanged, this,
+  connect(m_suiteTabs, &QTabBar::currentChanged, this,
           &SuiteDock::onSelectionChanged);
-  connect(m_suiteList, &QListWidget::itemDoubleClicked, this,
-          [this](QListWidgetItem *) { onActivateSelected(); });
+  connect(m_suiteTabs, &QTabBar::tabBarDoubleClicked, this,
+          [this](int index) {
+            if (index < 0)
+              return;
+            m_suiteTabs->setCurrentIndex(index);
+            onActivateSelected();
+          });
   connect(addBtn, &QPushButton::clicked, this, &SuiteDock::onAddSuite);
   connect(m_renameBtn, &QPushButton::clicked, this, &SuiteDock::onRenameSuite);
   connect(m_duplicateBtn, &QPushButton::clicked, this,
           &SuiteDock::onDuplicateSuite);
   connect(m_removeBtn, &QPushButton::clicked, this, &SuiteDock::onRemoveSuite);
   connect(m_mergeBtn, &QPushButton::clicked, this, &SuiteDock::onMergeSuites);
-  connect(m_suiteList, &QListWidget::customContextMenuRequested, this,
+  connect(m_suiteTabs, &QTabBar::customContextMenuRequested, this,
           &SuiteDock::onSuiteContextMenu);
   connect(m_activateBtn, &QPushButton::clicked, this,
           &SuiteDock::onActivateSelected);
@@ -505,21 +521,18 @@ bool SuiteDock::eventFilter(QObject *watched, QEvent *event)
 
 QString SuiteDock::selectedSuiteId() const
 {
-  auto *item = m_suiteList->currentItem();
-  if (!item)
+  const int index = m_suiteTabs->currentIndex();
+  if (index < 0)
     return {};
-  return item->data(Qt::UserRole).toString();
+  return m_suiteTabs->tabData(index).toString();
 }
 
 QStringList SuiteDock::selectedSuiteIds() const
 {
-  QStringList ids;
-  for (int i = 0; i < m_suiteList->count(); ++i) {
-    QListWidgetItem *item = m_suiteList->item(i);
-    if (item->isSelected())
-      ids.append(item->data(Qt::UserRole).toString());
-  }
-  return ids;
+  // A escolha de várias suítes acontece no diálogo de mesclagem; aqui só
+  // existe a aba atual.
+  const QString id = selectedSuiteId();
+  return id.isEmpty() ? QStringList() : QStringList{id};
 }
 
 Suite *SuiteDock::selectedSuite()
@@ -537,9 +550,9 @@ void SuiteDock::persistSelectedSuite()
 
 void SuiteDock::selectSuiteById(const QString &id)
 {
-  for (int i = 0; i < m_suiteList->count(); ++i) {
-    if (m_suiteList->item(i)->data(Qt::UserRole).toString() == id) {
-      m_suiteList->setCurrentRow(i);
+  for (int i = 0; i < m_suiteTabs->count(); ++i) {
+    if (m_suiteTabs->tabData(i).toString() == id) {
+      m_suiteTabs->setCurrentIndex(i);
       return;
     }
   }
@@ -590,46 +603,41 @@ void SuiteDock::refresh()
     return;
 
   m_updating = true;
-  // Guarda todas as suites marcadas, e nao so a linha atual, para uma
-  // marcacao de varias nao se desfazer a cada atualizacao da lista.
-  const QStringList previouslyMarked = selectedSuiteIds();
   const QString previousCurrent = selectedSuiteId();
   const int previousStepIndex = currentStepIndex();
-  m_suiteList->clear();
 
-  QListWidgetItem *currentItem = nullptr;
+  const QSignalBlocker blockTabs(m_suiteTabs);
+  while (m_suiteTabs->count() > 0)
+    m_suiteTabs->removeTab(0);
+
+  int currentIndex = -1;
   for (const Suite &suite : m_store->suites()) {
     const bool active = suite.id == m_store->activeSuiteId();
-    QString text = tr("%1  ·  %2")
-                       .arg(suite.name, stepCountText(suite.steps.size()));
-    if (active)
-      text += tr("  ·  ativa");
-    auto *item = new QListWidgetItem(text, m_suiteList);
-    item->setData(Qt::UserRole, suite.id);
-    if (active) {
-      QFont font = item->font();
-      font.setBold(true);
-      item->setFont(font);
-      item->setToolTip(tr("Esta é a suíte que roda ao iniciar a gravação."));
-    }
-    if (previouslyMarked.contains(suite.id))
-      item->setSelected(true);
+    // A suíte ativa ganha um marcador, para a aba dizer quem roda ao gravar.
+    const int index =
+        m_suiteTabs->addTab(active ? tr("%1  ●").arg(suite.name) : suite.name);
+    m_suiteTabs->setTabData(index, suite.id);
+    m_suiteTabs->setTabToolTip(
+        index, active ? tr("%1 — %2. Esta é a suíte ativa: é ela que roda ao "
+                           "iniciar a gravação.")
+                            .arg(suite.name,
+                                 stepCountText(suite.steps.size()))
+                      : tr("%1 — %2").arg(suite.name,
+                                          stepCountText(suite.steps.size())));
     if (suite.id == previousCurrent)
-      currentItem = item;
+      currentIndex = index;
   }
 
-  if (!currentItem && m_suiteList->count() > 0)
-    currentItem = m_suiteList->item(0);
-  if (currentItem) {
-    m_suiteList->setCurrentItem(currentItem,
-                                previouslyMarked.isEmpty()
-                                    ? QItemSelectionModel::ClearAndSelect
-                                    : QItemSelectionModel::NoUpdate);
-  }
+  if (currentIndex < 0 && m_suiteTabs->count() > 0)
+    currentIndex = 0;
+  if (currentIndex >= 0)
+    m_suiteTabs->setCurrentIndex(currentIndex);
 
   const Suite *active = m_store->activeSuite();
-  m_activeLabel->setText(active ? tr("Suíte ativa: %1").arg(active->name)
-                                : tr("Nenhuma suíte ativa"));
+  m_activeLabel->setText(
+      active ? tr("Suíte ativa: %1 — é ela que roda ao gravar.")
+                   .arg(active->name)
+             : tr("Nenhuma suíte ativa: nada roda ao iniciar a gravação."));
 
   m_updating = false;
   onSelectionChanged();
@@ -646,6 +654,18 @@ void SuiteDock::onSelectionChanged()
 
   Suite *suite = selectedSuite();
   m_stepList->clear();
+
+  // O cabeçalho deixa explícito de qual suíte são os passos mostrados.
+  if (suite)
+    m_stepsHeader->setText(
+        suite->id == m_store->activeSuiteId()
+            ? tr("%1 · %2 · suíte ativa")
+                  .arg(suite->name, stepCountText(suite->steps.size()))
+            : tr("%1 · %2").arg(suite->name,
+                                stepCountText(suite->steps.size())));
+  else
+    m_stepsHeader->setText(
+        tr("Nenhuma suíte ainda. Use \"+ Nova suíte\" para criar a primeira."));
 
   const QSignalBlocker blockFolder(m_openFolderCheck);
   const QSignalBlocker blockStart(m_runOnStartCheck);
@@ -670,14 +690,13 @@ void SuiteDock::onSelectionChanged()
 
     if (groupId.isEmpty()) {
       const SuiteStep &step = steps.at(i);
-      // Primeira linha: numero e tipo. Segunda linha: o que o passo faz.
+      // Uma linha por passo: o resumo ja diz o que ele faz. O tipo fica na
+      // dica de tela, para a lista nao virar um muro de texto.
       auto *item = new QListWidgetItem(
-          tr("%1 · %2\n%3")
-              .arg(block)
-              .arg(stepTypeLabel(step.type), step.summary()),
-          m_stepList);
+          tr("%1. %2").arg(block).arg(step.summary()), m_stepList);
       item->setData(kRoleStepIndex, i);
-      item->setToolTip(stepTypeHelp(step.type));
+      item->setToolTip(tr("%1 — %2").arg(stepTypeLabel(step.type),
+                                         stepTypeHelp(step.type)));
       QFont font = item->font();
       font.setPointSizeF(font.pointSizeF() * 0.95);
       item->setFont(font);
@@ -695,40 +714,45 @@ void SuiteDock::onSelectionChanged()
                              ? tr("Grupo sem nome")
                              : steps.at(i).groupName.trimmed();
     const SuiteGroupWhen when = steps.at(i).groupWhen;
-    QString headerText = tr("%1 · Grupo: %2  ·  %3 ações  ·  %4")
+    QString headerText = tr("%1. %2 · %3 ações · %4")
                              .arg(block)
                              .arg(name)
                              .arg(members)
                              .arg(suiteGroupWhenLabel(when));
-    if (steps.at(i).groupFade == SuiteGroupFade::FromBlack) {
-      headerText +=
-          tr("\n      começa na tela preta e clareia em %1 ms quando as ações "
-             "terminam")
-              .arg(steps.at(i).groupFadeMs);
-    } else if (steps.at(i).groupFade == SuiteGroupFade::ToBlack) {
-      headerText += tr("\n      escurece até o preto em %1 ms antes das ações")
+    if (steps.at(i).groupFade == SuiteGroupFade::FromBlack)
+      headerText += tr(" · clareia do preto em %1 ms")
                         .arg(steps.at(i).groupFadeMs);
-    }
+    else if (steps.at(i).groupFade == SuiteGroupFade::ToBlack)
+      headerText +=
+          tr(" · escurece até o preto em %1 ms").arg(steps.at(i).groupFadeMs);
     auto *header = new QListWidgetItem(headerText, m_stepList);
     header->setData(kRoleStepIndex, -1);
     header->setData(kRoleGroupId, groupId);
-    header->setToolTip(
+    QString headerHelp =
         tr("Clique duas vezes (ou use o botão direito) para escolher o nome e "
            "quando este grupo roda: ao iniciar a gravação, ao encerrar, ou "
-           "sempre."));
+           "sempre.");
+    if (steps.at(i).groupFade == SuiteGroupFade::FromBlack)
+      headerHelp += tr("\n\nA tela começa preta e clareia em %1 ms depois que "
+                       "as ações do grupo terminam.")
+                        .arg(steps.at(i).groupFadeMs);
+    else if (steps.at(i).groupFade == SuiteGroupFade::ToBlack)
+      headerHelp += tr("\n\nA tela escurece até o preto em %1 ms antes das "
+                       "ações do grupo.")
+                        .arg(steps.at(i).groupFadeMs);
+    header->setToolTip(headerHelp);
     QFont headerFont = header->font();
     headerFont.setBold(true);
     header->setFont(headerFont);
 
     for (int k = i; k < end; ++k) {
       const SuiteStep &step = steps.at(k);
-      auto *item = new QListWidgetItem(
-          tr("      • %1\n      %2")
-              .arg(stepTypeLabel(step.type), step.summary()),
-          m_stepList);
+      auto *item =
+          new QListWidgetItem(tr("     • %1").arg(step.summary()), m_stepList);
       item->setData(kRoleStepIndex, k);
       item->setData(kRoleGroupId, groupId);
-      item->setToolTip(stepTypeHelp(step.type));
+      item->setToolTip(tr("%1 — %2").arg(stepTypeLabel(step.type),
+                                         stepTypeHelp(step.type)));
       QFont font = item->font();
       font.setPointSizeF(font.pointSizeF() * 0.95);
       item->setFont(font);
@@ -740,7 +764,9 @@ void SuiteDock::onSelectionChanged()
 
   if (steps.isEmpty()) {
     auto *item = new QListWidgetItem(
-        tr("Nenhum passo ainda. Use \"Adicionar\"."), m_stepList);
+        tr("Nenhum passo nesta suíte. Use \"Adicionar\" para criar a "
+           "automação."),
+        m_stepList);
     item->setFlags(Qt::NoItemFlags);
   }
 
@@ -758,6 +784,9 @@ void SuiteDock::onAddSuite()
   const Suite created = m_store->createSuite(name);
   refresh();
   selectSuiteById(created.id);
+  // A suite acabou de nascer vazia: abre logo a aba onde se montam os passos.
+  if (m_pages)
+    m_pages->setCurrentIndex(0);
 }
 
 void SuiteDock::onRenameSuite()
@@ -955,16 +984,21 @@ void SuiteDock::onMergeSuites()
 
 void SuiteDock::onSuiteContextMenu(const QPoint &pos)
 {
-  const int marked = selectedSuiteIds().size();
+  // O menu age sobre a aba clicada, e não sobre a que estava aberta.
+  const int clicked = m_suiteTabs->tabAt(pos);
+  if (clicked >= 0)
+    m_suiteTabs->setCurrentIndex(clicked);
+
   QMenu menu(this);
+
+  QAction *create = menu.addAction(tr("Nova suíte..."));
+  connect(create, &QAction::triggered, this, &SuiteDock::onAddSuite);
 
   QAction *activate = menu.addAction(tr("Ativar esta suíte"));
   activate->setEnabled(!selectedSuiteId().isEmpty());
   connect(activate, &QAction::triggered, this, &SuiteDock::onActivateSelected);
 
-  QAction *merge = menu.addAction(
-      marked >= 2 ? tr("Mesclar as %1 suítes marcadas...").arg(marked)
-                  : tr("Mesclar suítes..."));
+  QAction *merge = menu.addAction(tr("Mesclar suítes..."));
   connect(merge, &QAction::triggered, this, &SuiteDock::onMergeSuites);
 
   menu.addSeparator();
@@ -981,7 +1015,7 @@ void SuiteDock::onSuiteContextMenu(const QPoint &pos)
   remove->setEnabled(!selectedSuiteId().isEmpty());
   connect(remove, &QAction::triggered, this, &SuiteDock::onRemoveSuite);
 
-  menu.exec(m_suiteList->mapToGlobal(pos));
+  menu.exec(m_suiteTabs->mapToGlobal(pos));
 }
 
 void SuiteDock::onOpenFolderToggled(bool checked)
