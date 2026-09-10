@@ -9,6 +9,10 @@ SuiteEngine::SuiteEngine(SuiteStore *store, QObject *parent)
 {
   m_timer.setSingleShot(true);
   connect(&m_timer, &QTimer::timeout, this, &SuiteEngine::advance);
+  m_stopRecordingTimer.setSingleShot(true);
+  connect(&m_stopRecordingTimer, &QTimer::timeout, this, []() {
+    SuiteActions::stopRecording();
+  });
 }
 
 void SuiteEngine::runActiveOnStart()
@@ -133,6 +137,12 @@ void SuiteEngine::cancel()
   // parado no meio do caminho.
   SuiteFader::finishAllNow();
   m_timer.stop();
+  // Cancela um stopRecording deferred (outro) para nao parar gravacao
+  // depois de uma suite cancelada ou substituida.
+  if (m_stopRecordingTimer.isActive()) {
+    m_stopRecordingTimer.stop();
+    m_outroRan = false;
+  }
   m_queue.clear();
   m_index = 0;
   m_skipNext = false;
@@ -321,7 +331,7 @@ void SuiteEngine::finish()
     m_tailMs = 0;
     blog(LOG_INFO,
          "[obs-overlay-time-show] encerrando a gravacao em %d ms", waitMs);
-    QTimer::singleShot(waitMs, this, []() { SuiteActions::stopRecording(); });
+    m_stopRecordingTimer.start(waitMs);
     return;
   }
 

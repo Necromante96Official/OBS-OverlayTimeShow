@@ -33,4 +33,7 @@ void finishAllNow();
 // Interrompe os fades em andamento e deixa o volume onde estava.
 void cancelAll();
 
+// Para o timer interno e cancela fades (chamado no unload do plugin).
+void shutdown();
+
 } // namespace SuiteFader

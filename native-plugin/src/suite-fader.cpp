@@ -158,13 +158,14 @@ private:
       m_timer.stop();
   }
 
+  void stopTimer() { m_timer.stop(); }
+
   QTimer m_timer;
   QVector<ActiveFade> m_fades;
 };
 
 Fader *fader()
 {
-  // Intencionalmente sem destruir: evita mexer em QTimer no fim do processo.
   static Fader *instance = new Fader();
   return instance;
 }
@@ -214,6 +215,13 @@ void finishAllNow()
 void cancelAll()
 {
   fader()->finishAll(false);
+}
+
+void shutdown()
+{
+  Fader *instance = fader();
+  instance->finishAll(false);
+  instance->stopTimer();
 }
 
 } // namespace SuiteFader

@@ -3,20 +3,38 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 rem ============================================================
-rem  Compila o plugin e instala no OBS (Steam).
+rem  Compila o plugin e instala no OBS.
 rem  Atualiza so a DLL e os textos do plugin.
 rem  NAO apaga posicao salva, atalhos nem cenas do OBS.
 rem ============================================================
 
-set "OBS_ROOT=D:\SteamLibrary\steamapps\common\OBS Studio"
 set "PLUGIN_DLL=obs-overlay-time-show.dll"
 set "PLUGIN_DATA=obs-overlay-time-show"
+
+set "OBS_ROOT="
+if defined OBS_STUDIO_PATH set "OBS_ROOT=%OBS_STUDIO_PATH%"
+if not defined OBS_ROOT if exist "D:\SteamLibrary\steamapps\common\OBS Studio\bin\64bit\obs64.exe" (
+  set "OBS_ROOT=D:\SteamLibrary\steamapps\common\OBS Studio"
+)
+if not defined OBS_ROOT if exist "%ProgramFiles%\obs-studio\bin\64bit\obs64.exe" set "OBS_ROOT=%ProgramFiles%\obs-studio"
+if not defined OBS_ROOT if exist "%ProgramFiles(x86)%\obs-studio\bin\64bit\obs64.exe" set "OBS_ROOT=%ProgramFiles(x86)%\obs-studio"
 
 echo.
 echo ========================================
 echo  OBS Overlay Time Show - Build + Install
 echo ========================================
 echo.
+
+if not defined OBS_ROOT (
+  echo Nao encontrei o OBS automaticamente.
+  echo.
+  echo Defina OBS_STUDIO_PATH, por exemplo:
+  echo   set OBS_STUDIO_PATH=D:\SteamLibrary\steamapps\common\OBS Studio
+  echo.
+  pause
+  exit /b 1
+)
+
 echo OBS destino:
 echo   %OBS_ROOT%
 echo.
@@ -25,7 +43,7 @@ if not exist "%OBS_ROOT%\bin\64bit\obs64.exe" (
   echo ERRO: OBS nao encontrado em:
   echo   %OBS_ROOT%
   echo.
-  echo Confirme o caminho da instalacao Steam.
+  echo Confirme o caminho ou defina OBS_STUDIO_PATH.
   pause
   exit /b 1
 )

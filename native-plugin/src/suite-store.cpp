@@ -7,8 +7,33 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QHash>
 #include <QUuid>
 #include <QDir>
+
+namespace {
+
+void remapStepGroupIds(QVector<SuiteStep> &steps)
+{
+  QHash<QString, QString> groupMap;
+  auto mapId = [&groupMap](const QString &id) -> QString {
+    if (id.isEmpty())
+      return id;
+    auto it = groupMap.find(id);
+    if (it != groupMap.end())
+      return it.value();
+    const QString fresh = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    groupMap.insert(id, fresh);
+    return fresh;
+  };
+
+  for (SuiteStep &step : steps) {
+    step.groupId = mapId(step.groupId);
+    step.conditionGroupId = mapId(step.conditionGroupId);
+  }
+}
+
+} // namespace
 
 SuiteStore::SuiteStore(QObject *parent) : QObject(parent) {}
 
@@ -155,6 +180,7 @@ Suite SuiteStore::duplicateSuite(const QString &id)
   Suite copy = *src;
   copy.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
   copy.name = src->name + QStringLiteral(" (cópia)");
+  remapStepGroupIds(copy.steps);
   m_suites.append(copy);
   save();
   emit changed();
@@ -204,6 +230,7 @@ Suite SuiteStore::mergeSuites(const QStringList &ids, const QString &name,
   merged.runOnRecordingStart = onStart;
   merged.runOnRecordingStop = onStop;
   merged.steps = steps;
+  remapStepGroupIds(merged.steps);
   m_suites.append(merged);
 
   if (removeOriginals) {

@@ -98,6 +98,8 @@
     let paused = false;
     let elapsedMs = 0;
     let segmentStart = performance.now();
+    let uiTimer = null;
+    let reconnectTimer = null;
 
     function formatElapsed(ms) {
       const total = Math.max(0, Math.floor(ms / 1000));
@@ -106,6 +108,14 @@
       const s = total % 60;
       if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
       return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    }
+
+    function setHintError(message) {
+      hintEl.textContent = "";
+      const span = document.createElement("span");
+      span.className = "error";
+      span.textContent = message;
+      hintEl.appendChild(span);
     }
 
     function updateUi() {
@@ -119,11 +129,32 @@
       statusEl.textContent = paused ? "PAUSADO" : "";
     }
 
-    function onRecordState(active, isPaused) {
+    function ensureUiTimer() {
+      if (uiTimer !== null) return;
+      uiTimer = setInterval(updateUi, 100);
+    }
+
+    function clearUiTimer() {
+      if (uiTimer !== null) {
+        clearInterval(uiTimer);
+        uiTimer = null;
+      }
+    }
+
+    function clearReconnectTimer() {
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    }
+
+    function onRecordState(active, isPaused, seededDurationMs) {
       if (active && !recording) {
         recording = true;
-        paused = false;
-        elapsedMs = 0;
+        paused = !!isPaused;
+        elapsedMs = typeof seededDurationMs === "number" && seededDurationMs >= 0
+          ? seededDurationMs
+          : 0;
         segmentStart = performance.now();
       } else if (active && recording) {
         if (isPaused && !paused) {
@@ -150,45 +181,134 @@
       return id;
     }
 
+    function bytesToBase64(bytes) {
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary);
+    }
+
+    async function sha256Base64(input) {
+      const data = typeof input === "string"
+        ? new TextEncoder().encode(input)
+        : input;
+      const hash = await crypto.subtle.digest("SHA-256", data);
+      return bytesToBase64(new Uint8Array(hash));
+    }
+
+    async function buildAuth(password, salt, challenge) {
+      // Protocolo obs-websocket 5: secret = b64(sha256(password+salt)),
+      // authentication = b64(sha256(secret+challenge)) com secret em texto Base64.
+      const secret = await sha256Base64(password + salt);
+      return sha256Base64(secret + challenge);
+    }
+
+    async function sendIdentify(hello) {
+      const identify = {
+        op: 1,
+        d: {
+          rpcVersion: 1,
+          eventSubscriptions: 64
+        }
+      };
+      if (hello && hello.authentication) {
+        const { salt, challenge } = hello.authentication;
+        identify.d.authentication = await buildAuth(WS_PASSWORD || "", salt, challenge);
+      }
+      hintEl.textContent = "Autenticando...";
+      socket.send(JSON.stringify(identify));
+    }
+
+    function scheduleReconnect() {
+      clearReconnectTimer();
+      reconnectTimer = setTimeout(connect, 3000);
+    }
+
+    function closeSocket() {
+      if (!socket) return;
+      const current = socket;
+      socket = null;
+      try {
+        current.onopen = null;
+        current.onmessage = null;
+        current.onclose = null;
+        current.onerror = null;
+        current.close();
+      } catch (_) {
+        /* ignore */
+      }
+    }
+
     function connect() {
-      socket = new WebSocket(`ws://${WS_HOST}:${WS_PORT}`);
-      socket.addEventListener("open", () => {
-        hintEl.textContent = "Autenticando...";
-        socket.send(JSON.stringify({
-          op: 1,
-          d: {
-            rpcVersion: 1,
-            authentication: WS_PASSWORD || undefined,
-            eventSubscriptions: 64
-          }
-        }));
+      clearReconnectTimer();
+      closeSocket();
+      hintEl.textContent = "Conectando ao OBS WebSocket...";
+
+      const ws = new WebSocket(`ws://${WS_HOST}:${WS_PORT}`);
+      socket = ws;
+
+      ws.addEventListener("open", () => {
+        hintEl.textContent = "Aguardando Hello...";
       });
-      socket.addEventListener("message", (event) => {
-        const payload = JSON.parse(event.data);
-        const { op, d } = payload;
-        if (op === 2) {
-          hintEl.textContent = "Dock interno do OBS — nao aparece na gravacao.";
-          sendRequest("GetRecordStatus");
-          setInterval(updateUi, 100);
+
+      ws.addEventListener("message", async (event) => {
+        let payload;
+        try {
+          payload = JSON.parse(event.data);
+        } catch (_) {
           return;
         }
+
+        const { op, d } = payload;
+
+        if (op === 0) {
+          try {
+            await sendIdentify(d);
+          } catch (err) {
+            setHintError("Falha ao autenticar no WebSocket.");
+            console.error(err);
+            ws.close();
+          }
+          return;
+        }
+
+        if (op === 2) {
+          hintEl.textContent = "Dock interno do OBS — nao aparece na gravacao.";
+          ensureUiTimer();
+          sendRequest("GetRecordStatus");
+          return;
+        }
+
+        if (op === 3) {
+          setHintError(`Auth falhou: ${d && d.authenticationFailure ? "senha incorreta" : "Identify rejeitado"}`);
+          return;
+        }
+
         if (op === 5 && d.eventType === "RecordStateChanged") {
           onRecordState(d.eventData.outputActive, d.eventData.outputPaused);
           return;
         }
+
         if (op === 7 && d.requestType === "GetRecordStatus") {
           const data = d.responseData || {};
-          onRecordState(data.outputActive, data.outputPaused);
+          const duration = typeof data.outputDuration === "number" ? data.outputDuration : undefined;
+          onRecordState(data.outputActive, data.outputPaused, duration);
+          return;
         }
+
         if (op === 8) {
-          hintEl.innerHTML = `<span class="error">Erro OBS: ${d.error}</span>`;
+          setHintError(`Erro OBS: ${d && d.error ? d.error : "desconhecido"}`);
         }
       });
-      socket.addEventListener("close", () => {
-        hintEl.innerHTML = '<span class="error">Desconectado. Verifique o WebSocket do OBS.</span>';
-        setTimeout(connect, 3000);
+
+      ws.addEventListener("close", () => {
+        if (socket !== ws) return;
+        socket = null;
+        clearUiTimer();
+        setHintError("Desconectado. Verifique o WebSocket do OBS.");
+        scheduleReconnect();
       });
     }
+
     connect();
   </script>
 </body>

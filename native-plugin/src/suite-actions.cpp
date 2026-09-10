@@ -270,7 +270,18 @@ bool openUrl(const QString &url)
 {
   if (url.isEmpty())
     return false;
-  return QDesktopServices::openUrl(QUrl(url, QUrl::TolerantMode));
+  const QUrl parsed(url, QUrl::TolerantMode);
+  if (!parsed.isValid())
+    return false;
+  const QString scheme = parsed.scheme().toLower();
+  if (scheme != QLatin1String("http") && scheme != QLatin1String("https") &&
+      scheme != QLatin1String("mailto")) {
+    blog(LOG_WARNING,
+         "[obs-overlay-time-show] OpenUrl bloqueado (scheme nao permitido): %s",
+         scheme.toUtf8().constData());
+    return false;
+  }
+  return QDesktopServices::openUrl(parsed);
 }
 
 bool openRecordingFolder()

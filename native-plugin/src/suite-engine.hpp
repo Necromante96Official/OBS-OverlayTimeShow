@@ -40,6 +40,8 @@ private:
 
   SuiteStore *m_store = nullptr;
   QTimer m_timer;
+  // Stop deferred apos outro — cancelavel via cancel().
+  QTimer m_stopRecordingTimer;
   QVector<SuiteStep> m_queue;
   int m_index = 0;
   bool m_running = false;

@@ -43,6 +43,7 @@ bool currentAnchor(Anchor *anchor);
 bool cycle(int direction);
 
 void load();
+void reload();
 void save();
 
 } // namespace CameraPosition

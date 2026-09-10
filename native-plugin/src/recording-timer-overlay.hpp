@@ -23,7 +23,7 @@ public:
 
   void moveBy(int dx, int dy);
 
-  void onRecordingStarted();
+  void onRecordingStarted(double seededSeconds = 0.0);
   void onRecordingStopped();
   void onRecordingPaused();
   void onRecordingUnpaused();
@@ -59,6 +59,8 @@ private:
 
   bool recording;
   bool paused;
+  bool overlayShown;
+  int lastDisplayedSecond;
   std::chrono::steady_clock::time_point segmentStart;
   std::chrono::steady_clock::time_point pulseStart;
   double elapsedSeconds;

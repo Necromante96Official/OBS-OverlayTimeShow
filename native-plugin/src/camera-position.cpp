@@ -481,9 +481,18 @@ void load()
 {
   if (g_loaded)
     return;
+  reload();
+}
+
+void reload()
+{
   config_t *config = obs_frontend_get_profile_config();
   if (!config)
     return;
+
+  g_sourceName.clear();
+  g_margin = 24;
+  g_allScenes = false;
 
   const char *name = config_get_string(config, kConfigSection, kConfigSource);
   if (name)

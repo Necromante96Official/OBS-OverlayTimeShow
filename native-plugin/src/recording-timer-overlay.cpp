@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGraphicsOpacityEffect>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -59,7 +60,8 @@ RecordingTimerOverlay::RecordingTimerOverlay(QWidget *parent)
       timeLabel(new QLabel(QStringLiteral("00:00"), pillFrame)),
       updateTimer(new QTimer(this)),
       iconOpacity(new QGraphicsOpacityEffect(this)), hasSavedPosition(false),
-      dragging(false), recording(false), paused(false),
+      dragging(false), recording(false), paused(false), overlayShown(false),
+      lastDisplayedSecond(-1),
       segmentStart(std::chrono::steady_clock::now()),
       pulseStart(std::chrono::steady_clock::now()), elapsedSeconds(0.0) {
   setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool);
@@ -108,7 +110,8 @@ RecordingTimerOverlay::RecordingTimerOverlay(QWidget *parent)
   updateIcon();
 
   connect(updateTimer, &QTimer::timeout, this, &RecordingTimerOverlay::tick);
-  updateTimer->start(50);
+  // Timer so roda enquanto a gravacao esta ativa (ver setOverlayVisible).
+  updateTimer->setInterval(50);
 
   hide();
 }
@@ -163,7 +166,11 @@ void RecordingTimerOverlay::savePosition() const {
 }
 
 void RecordingTimerOverlay::clampToScreen() {
-  const QScreen *screen = QApplication::primaryScreen();
+  QScreen *screen = QGuiApplication::screenAt(overlayPos);
+  if (!screen)
+    screen = QApplication::screenAt(QCursor::pos());
+  if (!screen)
+    screen = QApplication::primaryScreen();
   if (!screen) {
     return;
   }
@@ -272,6 +279,10 @@ void RecordingTimerOverlay::updatePulse() {
 }
 
 void RecordingTimerOverlay::setOverlayVisible(bool visible) {
+  if (visible == overlayShown && visible == isVisible()) {
+    return;
+  }
+
   if (visible) {
     if (!hasSavedPosition) {
       const QScreen *screen = QApplication::primaryScreen();
@@ -294,8 +305,13 @@ void RecordingTimerOverlay::setOverlayVisible(bool visible) {
                  SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
 #endif
     applyExcludeFromCapture();
+    if (!updateTimer->isActive())
+      updateTimer->start();
+    overlayShown = true;
   } else {
     hide();
+    updateTimer->stop();
+    overlayShown = false;
   }
 }
 
@@ -328,16 +344,21 @@ void RecordingTimerOverlay::tick() {
     segmentStart = now;
   }
 
-  timeLabel->setText(formatElapsed());
+  const int displayed = static_cast<int>(elapsedSeconds);
+  if (displayed != lastDisplayedSecond) {
+    timeLabel->setText(formatElapsed());
+    lastDisplayedSecond = displayed;
+  }
   updateIcon();
   updatePulse();
   setOverlayVisible(recording);
 }
 
-void RecordingTimerOverlay::onRecordingStarted() {
+void RecordingTimerOverlay::onRecordingStarted(double seededSeconds) {
   recording = true;
   paused = false;
-  elapsedSeconds = 0.0;
+  elapsedSeconds = seededSeconds > 0.0 ? seededSeconds : 0.0;
+  lastDisplayedSecond = -1;
   segmentStart = std::chrono::steady_clock::now();
   pulseStart = segmentStart;
   tick();

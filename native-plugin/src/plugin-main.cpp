@@ -3,12 +3,14 @@
 #include "rounded-corners-filter.hpp"
 #include "suite-dock.hpp"
 #include "suite-engine.hpp"
+#include "suite-fader.hpp"
 #include "suite-outro-hotkey.hpp"
 #include "suite-store.hpp"
 
 #include <obs-frontend-api.h>
 #include <obs-hotkey.h>
 #include <obs-module.h>
+#include <obs.h>
 #include <util/config-file.h>
 #include <util/platform.h>
 
@@ -695,6 +697,7 @@ void on_frontend_event(enum obs_frontend_event event, void *)
   case OBS_FRONTEND_EVENT_PROFILE_CHANGED:
   case OBS_FRONTEND_EVENT_PROFILE_LIST_CHANGED:
     load_all_hotkey_bindings();
+    CameraPosition::reload();
     break;
   case OBS_FRONTEND_EVENT_EXIT:
     save_all_hotkey_bindings();
@@ -722,12 +725,43 @@ void on_frontend_event(enum obs_frontend_event event, void *)
   }
 }
 
+double recording_elapsed_seconds()
+{
+  obs_output_t *output = obs_frontend_get_recording_output();
+  if (!output)
+    return 0.0;
+  if (!obs_output_active(output)) {
+    obs_output_release(output);
+    return 0.0;
+  }
+
+  video_t *video = obs_output_video(output);
+  if (!video) {
+    obs_output_release(output);
+    return 0.0;
+  }
+
+  const uint64_t frameTimeNs = video_output_get_frame_time(video);
+  const int totalFrames = obs_output_get_total_frames(output);
+  obs_output_release(output);
+
+  if (frameTimeNs == 0 || totalFrames <= 0)
+    return 0.0;
+
+  return (static_cast<double>(totalFrames) *
+          static_cast<double>(frameTimeNs)) /
+         1000000000.0;
+}
+
 void sync_overlay_state()
 {
   if (!overlay)
     return;
   if (obs_frontend_recording_active()) {
-    runOnOverlay([](RecordingTimerOverlay *w) { w->onRecordingStarted(); });
+    const double seeded = recording_elapsed_seconds();
+    runOnOverlay([seeded](RecordingTimerOverlay *w) {
+      w->onRecordingStarted(seeded);
+    });
     if (obs_frontend_recording_paused())
       runOnOverlay([](RecordingTimerOverlay *w) { w->onRecordingPaused(); });
   } else {
@@ -873,6 +907,8 @@ void obs_module_unload(void)
 
   if (suiteEngine)
     suiteEngine->cancel();
+
+  SuiteFader::shutdown();
 
   if (suiteDockRegistered) {
     obs_frontend_remove_dock(kDockId);
