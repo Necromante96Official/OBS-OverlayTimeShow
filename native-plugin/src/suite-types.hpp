@@ -139,6 +139,11 @@ struct Suite {
   // gatilho para separar o que acontece em cada um.
   bool runOnRecordingStart = true;
   bool runOnRecordingStop = false;
+  // Slots de grupo: vazios = legado (filtra por groupWhen de cada grupo).
+  // Preenchidos = so aquele grupo (+ passos soltos) no gatilho correspondente.
+  QString groupOnStartId;
+  QString groupOnStopId;
+  QString groupOnHotkeyId;
   QVector<SuiteStep> steps;
 
   QJsonObject toJson() const;

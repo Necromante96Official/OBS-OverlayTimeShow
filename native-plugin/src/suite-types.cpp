@@ -423,6 +423,9 @@ QJsonObject Suite::toJson() const
   obj.insert(QStringLiteral("openRecordingFolderOnStop"), openRecordingFolderOnStop);
   obj.insert(QStringLiteral("runOnRecordingStart"), runOnRecordingStart);
   obj.insert(QStringLiteral("runOnRecordingStop"), runOnRecordingStop);
+  obj.insert(QStringLiteral("groupOnStartId"), groupOnStartId);
+  obj.insert(QStringLiteral("groupOnStopId"), groupOnStopId);
+  obj.insert(QStringLiteral("groupOnHotkeyId"), groupOnHotkeyId);
   QJsonArray arr;
   for (const SuiteStep &step : steps)
     arr.append(step.toJson());
@@ -441,8 +444,31 @@ Suite Suite::fromJson(const QJsonObject &obj)
       obj.value(QStringLiteral("runOnRecordingStart")).toBool(true);
   suite.runOnRecordingStop =
       obj.value(QStringLiteral("runOnRecordingStop")).toBool(false);
+  suite.groupOnStartId =
+      obj.value(QStringLiteral("groupOnStartId")).toString();
+  suite.groupOnStopId = obj.value(QStringLiteral("groupOnStopId")).toString();
+  suite.groupOnHotkeyId =
+      obj.value(QStringLiteral("groupOnHotkeyId")).toString();
   const QJsonArray arr = obj.value(QStringLiteral("steps")).toArray();
   for (const QJsonValue &value : arr)
     suite.steps.append(SuiteStep::fromJson(value.toObject()));
+
+  // Descarta slots que apontam para grupos que nao existem mais.
+  auto groupExists = [&](const QString &id) {
+    if (id.isEmpty())
+      return true;
+    for (const SuiteStep &step : suite.steps) {
+      if (step.groupId == id)
+        return true;
+    }
+    return false;
+  };
+  if (!groupExists(suite.groupOnStartId))
+    suite.groupOnStartId.clear();
+  if (!groupExists(suite.groupOnStopId))
+    suite.groupOnStopId.clear();
+  if (!groupExists(suite.groupOnHotkeyId))
+    suite.groupOnHotkeyId.clear();
+
   return suite;
 }

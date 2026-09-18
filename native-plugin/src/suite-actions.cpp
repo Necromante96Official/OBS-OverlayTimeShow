@@ -48,26 +48,64 @@ QStringList sceneNames()
 QStringList sourceNamesInScene(const QString &sceneName)
 {
   QStringList names;
+  for (const auto &entry : sourceEntriesInScene(sceneName))
+    names.append(entry.second);
+  return names;
+}
+
+namespace {
+
+struct SourceWalkCtx {
+  QVector<QPair<QString, QString>> *out = nullptr;
+  QString prefix;
+};
+
+// Lista a fonte e, se for grupo, as fontes de dentro (com rotulo "Grupo › Filho").
+bool enumSceneSources(obs_scene_t *, obs_sceneitem_t *item, void *param)
+{
+  auto *ctx = static_cast<SourceWalkCtx *>(param);
+  if (!ctx || !ctx->out || !item)
+    return true;
+
+  obs_source_t *src = obs_sceneitem_get_source(item);
+  if (!src)
+    return true;
+
+  const QString name = QString::fromUtf8(obs_source_get_name(src));
+  const QString label = ctx->prefix.isEmpty()
+                            ? name
+                            : QStringLiteral("%1 › %2").arg(ctx->prefix, name);
+  ctx->out->append({label, name});
+
+  if (obs_sceneitem_is_group(item)) {
+    SourceWalkCtx nested;
+    nested.out = ctx->out;
+    nested.prefix = label;
+    obs_sceneitem_group_enum_items(item, enumSceneSources, &nested);
+  }
+  return true;
+}
+
+} // namespace
+
+QVector<QPair<QString, QString>> sourceEntriesInScene(const QString &sceneName)
+{
+  QVector<QPair<QString, QString>> entries;
   obs_source_t *sceneSource = findSourceByName(sceneName);
   if (!sceneSource)
-    return names;
+    return entries;
 
   obs_scene_t *scene = obs_scene_from_source(sceneSource);
   if (!scene) {
     obs_source_release(sceneSource);
-    return names;
+    return entries;
   }
 
-  auto cb = [](obs_scene_t *, obs_sceneitem_t *item, void *param) -> bool {
-    auto *out = static_cast<QStringList *>(param);
-    obs_source_t *src = obs_sceneitem_get_source(item);
-    if (src)
-      out->append(QString::fromUtf8(obs_source_get_name(src)));
-    return true;
-  };
-  obs_scene_enum_items(scene, cb, &names);
+  SourceWalkCtx root;
+  root.out = &entries;
+  obs_scene_enum_items(scene, enumSceneSources, &root);
   obs_source_release(sceneSource);
-  return names;
+  return entries;
 }
 
 QStringList transitionNames()
@@ -148,7 +186,7 @@ bool applyItemTransition(const QString &sceneName, const QString &sourceName,
     return false;
   }
   obs_sceneitem_t *item =
-      obs_scene_find_source(scene, sourceName.toUtf8().constData());
+      obs_scene_find_source_recursive(scene, sourceName.toUtf8().constData());
   if (!item) {
     obs_source_release(sceneSource);
     return false;
@@ -197,7 +235,7 @@ bool setSourceVisible(const QString &sceneName, const QString &sourceName,
     return false;
   }
   obs_sceneitem_t *item =
-      obs_scene_find_source(scene, sourceName.toUtf8().constData());
+      obs_scene_find_source_recursive(scene, sourceName.toUtf8().constData());
   if (!item) {
     obs_source_release(sceneSource);
     return false;
@@ -493,7 +531,7 @@ bool isSourceVisible(const QString &sceneName, const QString &sourceName,
     return false;
   }
   obs_sceneitem_t *item =
-      obs_scene_find_source(scene, sourceName.toUtf8().constData());
+      obs_scene_find_source_recursive(scene, sourceName.toUtf8().constData());
   const bool visible = item ? obs_sceneitem_visible(item) : false;
   obs_source_release(sceneSource);
   return visible == expectVisible;
@@ -558,12 +596,29 @@ bool executeStep(const SuiteStep &step, bool *skipNextOut, int *waitMsOut)
     return setScene(step.scene);
   case SuiteStepType::SetSourceVisible: {
     const bool withFade = step.fadeAudio && sourceHasAudio(step.source);
-    if (!withFade)
-      return setSourceVisible(step.scene, step.source, step.visible,
-                              step.itemTransitionId, step.itemTransitionMs);
+    const bool hasItemTransition =
+        !step.itemTransitionId.isEmpty() &&
+        step.itemTransitionId != QLatin1String("none");
+    const int itemMs = qMax(0, step.itemTransitionMs);
 
-    if (waitForFade && waitMsOut)
-      *waitMsOut = fadeMs;
+    if (!withFade) {
+      const bool ok =
+          setSourceVisible(step.scene, step.source, step.visible,
+                           step.itemTransitionId, step.itemTransitionMs);
+      // A transicao Esmaecer/etc. roda em paralelo: o passo precisa esperar
+      // ela terminar, senao o encerramento da gravacao corta no meio.
+      if (ok && waitMsOut && step.waitForFade && hasItemTransition)
+        *waitMsOut = itemMs;
+      return ok;
+    }
+
+    int wait = 0;
+    if (waitForFade)
+      wait = fadeMs;
+    if (step.waitForFade && hasItemTransition)
+      wait = qMax(wait, itemMs);
+    if (waitMsOut)
+      *waitMsOut = wait;
 
     if (step.visible) {
       // Aparece em silencio e o audio sobe ate o volume escolhido.

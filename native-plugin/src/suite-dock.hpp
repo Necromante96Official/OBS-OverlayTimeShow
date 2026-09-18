@@ -1,6 +1,5 @@
 #pragma once
 
-#include "camera-position.hpp"
 #include "suite-engine.hpp"
 #include "suite-store.hpp"
 
@@ -15,7 +14,6 @@ class QListWidget;
 class QListWidgetItem;
 class QPushButton;
 class QShowEvent;
-class QSpinBox;
 class QTabBar;
 class QTabWidget;
 
@@ -29,14 +27,13 @@ protected:
   // Refaz o calculo de altura dos itens quando o painel muda de largura,
   // para o texto quebrado nao ficar cortado.
   bool eventFilter(QObject *watched, QEvent *event) override;
-  // As fontes da cena so existem depois que o OBS carrega, por isso a lista
-  // de camera e refeita a cada vez que o painel aparece.
   void showEvent(QShowEvent *event) override;
 
 private slots:
   void refresh();
   void onSelectionChanged();
   void onAddSuite();
+  void onAddExampleSuite();
   void onRenameSuite();
   void onDuplicateSuite();
   void onRemoveSuite();
@@ -56,14 +53,18 @@ private slots:
   void onOpenFolderToggled(bool checked);
   void onRunOnStartToggled(bool checked);
   void onRunOnStopToggled(bool checked);
+  void onGroupOnStartChanged(int index);
+  void onGroupOnStopChanged(int index);
+  void onGroupOnHotkeyChanged(int index);
   void onRunNow();
   void onStopWithOutro();
   void onOutroHotkeySetup();
-  void onCameraSourceChanged(int index);
-  void onCameraMarginChanged(int value);
-  void onCameraAllScenesToggled(bool enabled);
-  void onCameraAnchor(CameraPosition::Anchor anchor);
-  void onCameraCycle(int direction);
+
+  void onEngineStarted(const QString &suiteName);
+  void onEngineStepStarted(int stepIndex, const QString &summary);
+  void onEngineStepFailed(const QString &summary);
+  void onEngineFinished();
+  void onEngineOutroState(bool active);
 
 private:
   QString selectedSuiteId() const;
@@ -90,24 +91,32 @@ private:
   void selectStepRowByIndex(int stepIndex);
   // Solta as condicoes que apontavam para um grupo que deixou de existir.
   void releaseConditionTargets(Suite *suite, const QString &groupId);
-  // Relista as fontes de video e recarrega as opcoes de posicao da camera.
-  void refreshCameraOptions();
-  // Explica por que a camera nao se moveu.
-  void warnCameraSourceMissing();
+  void clearSuiteGroupSlots(Suite *suite, const QString &groupId);
+  void refreshGroupSlotCombos();
+  void applyGroupSlot(QComboBox *combo, QString *slotField,
+                      SuiteGroupWhen syncWhen, bool enableRunFlag);
+  void highlightRunningStep(int stepIndex);
+  void setStatusText(const QString &text);
 
   SuiteStore *m_store = nullptr;
   SuiteEngine *m_engine = nullptr;
 
-  // Cada aba é uma suíte; as abas de conteúdo abaixo mostram os passos, as
-  // opções de gravação e a câmera, uma coisa por vez.
+  // Cada aba e uma suite; as abas de conteudo abaixo mostram os passos e as
+  // opcoes da suite, uma coisa por vez.
   QTabBar *m_suiteTabs = nullptr;
   QTabWidget *m_pages = nullptr;
   QLabel *m_stepsHeader = nullptr;
+  QLabel *m_statusLabel = nullptr;
   QListWidget *m_stepList = nullptr;
   QCheckBox *m_openFolderCheck = nullptr;
   QCheckBox *m_runOnStartCheck = nullptr;
   QCheckBox *m_runOnStopCheck = nullptr;
+  QComboBox *m_groupOnStartCombo = nullptr;
+  QComboBox *m_groupOnStopCombo = nullptr;
+  QComboBox *m_groupOnHotkeyCombo = nullptr;
   QLabel *m_activeLabel = nullptr;
+  QWidget *m_emptyState = nullptr;
+  QPushButton *m_exampleSuiteBtn = nullptr;
 
   QPushButton *m_renameBtn = nullptr;
   QPushButton *m_duplicateBtn = nullptr;
@@ -117,18 +126,12 @@ private:
   QPushButton *m_deactivateBtn = nullptr;
 
   QPushButton *m_addStepBtn = nullptr;
-  QPushButton *m_editStepBtn = nullptr;
-  QPushButton *m_removeStepBtn = nullptr;
   QPushButton *m_upBtn = nullptr;
   QPushButton *m_downBtn = nullptr;
-  QPushButton *m_mergeStepsBtn = nullptr;
-  QPushButton *m_unmergeStepsBtn = nullptr;
   QPushButton *m_runBtn = nullptr;
   QPushButton *m_stopWithOutroBtn = nullptr;
   QPushButton *m_outroKeyBtn = nullptr;
-  QComboBox *m_cameraSourceCombo = nullptr;
-  QSpinBox *m_cameraMarginSpin = nullptr;
-  QCheckBox *m_cameraAllScenesCheck = nullptr;
 
+  int m_runningStepIndex = -1;
   bool m_updating = false;
 };

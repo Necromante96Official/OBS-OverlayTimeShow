@@ -219,9 +219,7 @@ void cancelAll()
 
 void shutdown()
 {
-  Fader *instance = fader();
-  instance->finishAll(false);
-  instance->stopTimer();
+  fader()->finishAll(false);
 }
 
 } // namespace SuiteFader

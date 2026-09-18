@@ -10,7 +10,8 @@ SuiteEngine::SuiteEngine(SuiteStore *store, QObject *parent)
   m_timer.setSingleShot(true);
   connect(&m_timer, &QTimer::timeout, this, &SuiteEngine::advance);
   m_stopRecordingTimer.setSingleShot(true);
-  connect(&m_stopRecordingTimer, &QTimer::timeout, this, []() {
+  connect(&m_stopRecordingTimer, &QTimer::timeout, this, [this]() {
+    emit outroState(false);
     SuiteActions::stopRecording();
   });
 }
@@ -79,6 +80,7 @@ void SuiteEngine::stopRecordingWithOutro()
          "[obs-overlay-time-show] encerramento pedido de novo, parando agora");
     cancel();
     m_outroRan = true;
+    emit outroState(false);
     SuiteActions::stopRecording();
     return;
   }
@@ -93,6 +95,7 @@ void SuiteEngine::stopRecordingWithOutro()
 
   // O evento de parada nao deve repetir o que estamos rodando agora.
   m_outroRan = true;
+  emit outroState(true);
   runSuite(*suite, SuiteTrigger::RecordingStopped, false, true);
 }
 
@@ -101,6 +104,7 @@ void SuiteEngine::onRecordingStopped()
   if (m_outroRan) {
     // O grupo de encerramento ja rodou antes de a gravacao parar.
     m_outroRan = false;
+    emit outroState(false);
     const Suite *suite = m_store ? m_store->activeSuite() : nullptr;
     if (suite && suite->openRecordingFolderOnStop &&
         !SuiteActions::openRecordingFolder()) {
@@ -133,6 +137,10 @@ void SuiteEngine::onRecordingStopped()
 
 void SuiteEngine::cancel()
 {
+  const bool wasRunning = m_running;
+  const bool wasOutroPending =
+      m_stopRecordingTimer.isActive() || m_stopRecordingWhenDone;
+
   // Aplica o volume final dos fades pendentes, para nao deixar audio
   // parado no meio do caminho.
   SuiteFader::finishAllNow();
@@ -148,10 +156,42 @@ void SuiteEngine::cancel()
   m_skipNext = false;
   m_skippedGroups.clear();
   m_currentGroupId.clear();
+  m_slotGroupId.clear();
   m_openFolderWhenDone = false;
   m_stopRecordingWhenDone = false;
   m_tailMs = 0;
   m_running = false;
+  m_suiteName.clear();
+
+  if (wasOutroPending)
+    emit outroState(false);
+  if (wasRunning)
+    emit finished();
+}
+
+QString SuiteEngine::slotGroupIdForTrigger(const Suite &suite,
+                                           SuiteTrigger trigger)
+{
+  switch (trigger) {
+  case SuiteTrigger::RecordingStarted:
+    return suite.groupOnStartId;
+  case SuiteTrigger::RecordingStopped:
+    return suite.groupOnStopId;
+  case SuiteTrigger::Manual:
+    return suite.groupOnHotkeyId;
+  }
+  return QString();
+}
+
+bool SuiteEngine::groupAllowed(const SuiteStep &step) const
+{
+  if (step.groupId.isEmpty())
+    return true;
+  if (m_skippedGroups.contains(step.groupId))
+    return false;
+  if (!m_slotGroupId.isEmpty())
+    return step.groupId == m_slotGroupId;
+  return suiteGroupWhenMatches(step.groupWhen, m_trigger);
 }
 
 QVector<SuiteStep> SuiteEngine::buildQueue(const Suite &suite)
@@ -207,12 +247,15 @@ void SuiteEngine::runSuite(const Suite &suite, SuiteTrigger trigger,
   m_queue = buildQueue(suite);
   m_index = 0;
   m_trigger = trigger;
+  m_slotGroupId = slotGroupIdForTrigger(suite, trigger);
   m_openFolderWhenDone = openFolderWhenDone;
   m_stopRecordingWhenDone = stopRecordingWhenDone;
   m_tailMs = 0;
   m_running = true;
+  m_suiteName = suite.name;
   blog(LOG_INFO, "[obs-overlay-time-show] executando suite: %s (%d passos)",
        suite.name.toUtf8().constData(), m_queue.size());
+  emit started(suite.name);
   advance();
 }
 
@@ -238,21 +281,22 @@ void SuiteEngine::advance()
       continue;
     }
 
-    // Um grupo so roda no momento escolhido nele, e nao roda se alguma
-    // condicao o desligou nesta execucao.
+    // Um grupo so roda no momento escolhido nele (ou no slot da suite), e
+    // nao roda se alguma condicao o desligou nesta execucao.
     const SuiteStep &pending = m_queue.at(m_index);
-    if (!pending.groupId.isEmpty() &&
-        (m_skippedGroups.contains(pending.groupId) ||
-         !suiteGroupWhenMatches(pending.groupWhen, m_trigger))) {
+    if (!groupAllowed(pending)) {
       ++m_index;
       continue;
     }
 
     const SuiteStep step = m_queue.at(m_index);
+    const int stepIndex = m_index;
     ++m_index;
 
     if (step.groupId != m_currentGroupId)
       m_currentGroupId = step.groupId;
+
+    emit stepStarted(stepIndex, step.summary());
 
     if (step.type == SuiteStepType::DelayMs) {
       const int waitMs = qMax(0, step.ms);
@@ -274,15 +318,16 @@ void SuiteEngine::advance()
     if (!ok) {
       blog(LOG_WARNING, "[obs-overlay-time-show] passo falhou: %s",
            step.summary().toUtf8().constData());
+      emit stepFailed(step.summary());
     }
     if (step.isCondition()) {
       conditionOk = !failed;
       applyConditionResult(step, conditionOk);
     }
 
-    // A transicao de mostrar/ocultar da fonte continua rodando depois do
-    // passo. Guardamos a maior para nao encerrar a gravacao no meio dela.
-    if (step.type == SuiteStepType::SetSourceVisible &&
+    // Se o passo ja esperou a transicao (waitMs), nao soma de novo no fim.
+    // So guarda sobra para o encerramento quando o passo nao bloqueou.
+    if (step.type == SuiteStepType::SetSourceVisible && waitMs == 0 &&
         !step.itemTransitionId.isEmpty() &&
         step.itemTransitionId != QLatin1String("none")) {
       m_tailMs = qMax(m_tailMs, step.itemTransitionMs);
@@ -290,7 +335,7 @@ void SuiteEngine::advance()
     if (waitMs == 0 && step.fadeAudio)
       m_tailMs = qMax(m_tailMs, step.fadeMs);
 
-    // Passos com transicao de audio podem pedir para esperar o fade terminar.
+    // Passos com transicao de audio/fonte podem pedir para esperar terminar.
     if (waitMs > 0) {
       m_timer.start(waitMs);
       return;
@@ -321,16 +366,19 @@ void SuiteEngine::finish()
   m_skipNext = false;
   m_skippedGroups.clear();
   m_currentGroupId.clear();
+  m_slotGroupId.clear();
   blog(LOG_INFO, "[obs-overlay-time-show] suite finalizada");
+  emit finished();
 
   if (m_stopRecordingWhenDone) {
     m_stopRecordingWhenDone = false;
-    // Uma folga curta garante que o ultimo quadro da transicao entre no
-    // arquivo antes de a gravacao fechar.
-    const int waitMs = qMax(0, m_tailMs) + 250;
+    // Folga extra apos a ultima transicao: o encoder ainda precisa gravar
+    // os ultimos quadros do esmaecer antes de fechar o arquivo.
+    const int waitMs = qMax(0, m_tailMs) + 750;
     m_tailMs = 0;
     blog(LOG_INFO,
          "[obs-overlay-time-show] encerrando a gravacao em %d ms", waitMs);
+    emit outroState(true);
     m_stopRecordingTimer.start(waitMs);
     return;
   }

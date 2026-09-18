@@ -143,9 +143,17 @@ struct FilterData {
   int roundsLeft = 0;
   float measureGap = 0.0f;
   float sinceMeasure = 0.0f;
-  bool needsDetect = false;
+  // Deteccao em 2 fases: stage neste quadro, map no proximo — nunca no mesmo
+  // frame, senao gs_stagesurface_map trava a GPU e a camera engasga.
+  bool queueStage = false;
+  bool queueMap = false;
   uint32_t lastBaseWidth = 0;
   uint32_t lastBaseHeight = 0;
+  // Resolucao precisa ficar estavel alguns ticks antes de re-medir (evita loop
+  // se a camera reportar tamanho oscilante no boot).
+  uint32_t candidateWidth = 0;
+  uint32_t candidateHeight = 0;
+  float sizeStableFor = 0.0f;
   gs_texrender_t *sampleRender = nullptr;
   gs_stagesurf_t *sampleSurface = nullptr;
   uint32_t sampleWidth = 0;
@@ -158,19 +166,31 @@ struct FilterData {
   struct vec2 uvOffset = {0.0f, 0.0f};
 };
 
-// Amostras de uma rodada e o intervalo entre elas. Varias medidas seguidas
-// tiram o efeito de um quadro ruim, e o resultado so e aplicado no fim da
-// rodada: assim o tamanho da fonte muda uma vez, e nao a cada medida.
-constexpr int kMeasuresPerRound = 5;
-constexpr float kMeasureGap = 0.3f;
-// Sem imagem util (camera ainda ligando, sala escura), tenta de novo com
-// calma, ate desistir.
-constexpr float kRetryGap = 3.0f;
-constexpr int kMaxRetryRounds = 20;
+// Poucas amostras e intervalo maior: o readback ainda custa, mesmo assincrono.
+constexpr int kMeasuresPerRound = 2;
+constexpr float kMeasureGap = 1.0f;
+constexpr float kRetryGap = 4.0f;
+constexpr int kMaxRetryRounds = 8;
+constexpr float kSizeStableSeconds = 0.5f;
+constexpr uint32_t kMaxSampleSide = 128;
 
 const char *filter_get_name(void *)
 {
   return obs_module_text("OBSOverlayTimeShow.Filter.RoundedCorners");
+}
+
+void release_sample_resources(FilterData *filter)
+{
+  if (filter->sampleSurface) {
+    gs_stagesurface_destroy(filter->sampleSurface);
+    filter->sampleSurface = nullptr;
+  }
+  if (filter->sampleRender) {
+    gs_texrender_destroy(filter->sampleRender);
+    filter->sampleRender = nullptr;
+  }
+  filter->sampleWidth = 0;
+  filter->sampleHeight = 0;
 }
 
 void start_measuring(FilterData *filter, float gap, int rounds)
@@ -180,7 +200,8 @@ void start_measuring(FilterData *filter, float gap, int rounds)
   filter->roundsLeft = rounds;
   filter->measureGap = gap;
   filter->sinceMeasure = 0.0f;
-  filter->needsDetect = false;
+  filter->queueStage = false;
+  filter->queueMap = false;
 }
 
 void filter_update(void *data, obs_data_t *settings)
@@ -205,37 +226,52 @@ void filter_update(void *data, obs_data_t *settings)
       static_cast<int>(obs_data_get_int(settings, kSettingCropBottom));
 
   const bool autoCrop = obs_data_get_bool(settings, kSettingAutoCrop);
-  filter->blackLevel =
+  const int blackLevel =
       static_cast<int>(obs_data_get_int(settings, kSettingBlackLevel));
-  if (autoCrop) {
-    // Ligar (ou mexer no nivel de preto) refaz a medida.
+  const bool autoCropTurnedOn = autoCrop && !filter->autoCrop;
+  const bool blackLevelChanged = autoCrop && blackLevel != filter->blackLevel;
+  filter->blackLevel = blackLevel;
+
+  if (autoCropTurnedOn || blackLevelChanged) {
+    // So re-mede ao ligar o auto-crop ou mudar o nivel de preto — nao a cada
+    // ajuste de raio/suavidade (isso travava a camera ao editar propriedades).
     start_measuring(filter, kMeasureGap, kMaxRetryRounds);
-  } else if (filter->autoCrop) {
+  } else if (!autoCrop && filter->autoCrop) {
     filter->autoLeft = 0;
     filter->autoRight = 0;
     filter->autoTop = 0;
     filter->autoBottom = 0;
+    filter->measuresLeft = 0;
+    filter->queueStage = false;
+    filter->queueMap = false;
+    obs_enter_graphics();
+    release_sample_resources(filter);
+    obs_leave_graphics();
   }
   filter->autoCrop = autoCrop;
 }
 
-// Renderiza uma amostra pequena da fonte, le de volta na CPU e acha a caixa
-// com imagem de verdade. Amostra reduzida porque para achar tarja preta nao
-// precisa de resolucao cheia, e a leitura da GPU e caro.
-bool detect_black_borders(FilterData *filter, obs_source_t *target,
-                          uint32_t baseWidth, uint32_t baseHeight, int *outLeft,
-                          int *outRight, int *outTop, int *outBottom)
+void sample_dimensions(uint32_t baseWidth, uint32_t baseHeight, uint32_t *sampleW,
+                       uint32_t *sampleH)
 {
-  constexpr uint32_t kMaxSide = 256;
-  uint32_t sampleW = baseWidth;
-  uint32_t sampleH = baseHeight;
-  if (baseWidth >= baseHeight && baseWidth > kMaxSide) {
-    sampleW = kMaxSide;
-    sampleH = std::max(1u, baseHeight * kMaxSide / baseWidth);
-  } else if (baseHeight > kMaxSide) {
-    sampleH = kMaxSide;
-    sampleW = std::max(1u, baseWidth * kMaxSide / baseHeight);
+  *sampleW = baseWidth;
+  *sampleH = baseHeight;
+  if (baseWidth >= baseHeight && baseWidth > kMaxSampleSide) {
+    *sampleW = kMaxSampleSide;
+    *sampleH = std::max(1u, baseHeight * kMaxSampleSide / baseWidth);
+  } else if (baseHeight > kMaxSampleSide) {
+    *sampleH = kMaxSampleSide;
+    *sampleW = std::max(1u, baseWidth * kMaxSampleSide / baseHeight);
   }
+}
+
+// Fase 1: renderiza amostra e agenda o stage. Nao le a GPU neste quadro.
+bool stage_border_sample(FilterData *filter, obs_source_t *target,
+                         uint32_t baseWidth, uint32_t baseHeight)
+{
+  uint32_t sampleW = 0;
+  uint32_t sampleH = 0;
+  sample_dimensions(baseWidth, baseHeight, &sampleW, &sampleH);
 
   if (!filter->sampleRender)
     filter->sampleRender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
@@ -266,6 +302,20 @@ bool detect_black_borders(FilterData *filter, obs_source_t *target,
 
   gs_stage_texture(filter->sampleSurface,
                    gs_texrender_get_texture(filter->sampleRender));
+  return true;
+}
+
+// Fase 2: le o stage do quadro anterior e calcula as bordas.
+bool map_border_sample(FilterData *filter, uint32_t baseWidth,
+                       uint32_t baseHeight, int *outLeft, int *outRight,
+                       int *outTop, int *outBottom)
+{
+  if (!filter->sampleSurface || filter->sampleWidth == 0 ||
+      filter->sampleHeight == 0)
+    return false;
+
+  const uint32_t sampleW = filter->sampleWidth;
+  const uint32_t sampleH = filter->sampleHeight;
 
   uint8_t *pixels = nullptr;
   uint32_t linesize = 0;
@@ -289,13 +339,11 @@ bool detect_black_borders(FilterData *filter, obs_source_t *target,
   }
   gs_stagesurface_unmap(filter->sampleSurface);
 
-  // Uma coluna/linha so conta como imagem se boa parte dela nao for preta,
-  // para um pixel perdido nao atrapalhar a medida.
   const int minColumn = std::max(2, static_cast<int>(sampleH) / 50);
   const int minRow = std::max(2, static_cast<int>(sampleW) / 50);
 
-  auto bounds = [](const std::vector<int> &hits, int minimum,
-                   int *first, int *last) {
+  auto bounds = [](const std::vector<int> &hits, int minimum, int *first,
+                   int *last) {
     *first = -1;
     *last = -1;
     for (size_t i = 0; i < hits.size(); ++i) {
@@ -311,20 +359,19 @@ bool detect_black_borders(FilterData *filter, obs_source_t *target,
   bounds(columnHits, minColumn, &firstCol, &lastCol);
   bounds(rowHits, minRow, &firstRow, &lastRow);
   if (firstCol < 0 || firstRow < 0)
-    return false; // Quadro todo escuro: nao serve de medida.
+    return false;
 
   const int litW = lastCol - firstCol + 1;
   const int litH = lastRow - firstRow + 1;
   if (litW * 10 < static_cast<int>(sampleW) ||
       litH * 10 < static_cast<int>(sampleH)) {
-    return false; // Sobrou muito pouco: provavelmente a cena so esta escura.
+    return false;
   }
 
-  const float scaleX = static_cast<float>(baseWidth) /
-                       static_cast<float>(sampleW);
-  const float scaleY = static_cast<float>(baseHeight) /
-                       static_cast<float>(sampleH);
-  // Folga de 2 pixels para nao sobrar a linha de transicao da tarja.
+  const float scaleX =
+      static_cast<float>(baseWidth) / static_cast<float>(sampleW);
+  const float scaleY =
+      static_cast<float>(baseHeight) / static_cast<float>(sampleH);
   constexpr int kInset = 2;
   const int left = static_cast<int>(std::floor(firstCol * scaleX));
   const int right = static_cast<int>(baseWidth) -
@@ -359,6 +406,39 @@ void commit_measurement(FilterData *filter)
   filter->autoBottom = filter->pendingBottom;
 }
 
+void finish_measure_slot(FilterData *filter, bool measured, int left, int right,
+                         int top, int bottom)
+{
+  if (measured) {
+    if (filter->pendingCount == 0) {
+      filter->pendingLeft = left;
+      filter->pendingRight = right;
+      filter->pendingTop = top;
+      filter->pendingBottom = bottom;
+    } else {
+      filter->pendingLeft = std::min(filter->pendingLeft, left);
+      filter->pendingRight = std::min(filter->pendingRight, right);
+      filter->pendingTop = std::min(filter->pendingTop, top);
+      filter->pendingBottom = std::min(filter->pendingBottom, bottom);
+    }
+    ++filter->pendingCount;
+  }
+
+  if (filter->measuresLeft > 0)
+    --filter->measuresLeft;
+  if (filter->measuresLeft == 0) {
+    if (filter->pendingCount > 0)
+      commit_measurement(filter);
+    else if (filter->roundsLeft > 0)
+      start_measuring(filter, kRetryGap, filter->roundsLeft - 1);
+
+    if (filter->measuresLeft == 0) {
+      // Rodada encerrada (ou esgotou retries): libera staging da GPU.
+      release_sample_resources(filter);
+    }
+  }
+}
+
 // O tamanho da fonte so e confiavel no tick, por isso o recorte e o mapeamento
 // de coordenadas sao recalculados aqui e reaproveitados na renderizacao.
 void filter_tick(void *data, float seconds)
@@ -373,21 +453,34 @@ void filter_tick(void *data, float seconds)
     return;
   }
 
-  // A medida so acontece numa rodada: no comeco, quando a fonte troca de
-  // resolucao, ou quando o usuario mexe nas opcoes. Fora disso o recorte fica
-  // parado, senao o tamanho da fonte muda sozinho e o item anda na cena.
   if (filter->autoCrop) {
     if (baseWidth != filter->lastBaseWidth ||
         baseHeight != filter->lastBaseHeight) {
-      filter->lastBaseWidth = baseWidth;
-      filter->lastBaseHeight = baseHeight;
-      start_measuring(filter, kMeasureGap, kMaxRetryRounds);
+      if (baseWidth != filter->candidateWidth ||
+          baseHeight != filter->candidateHeight) {
+        filter->candidateWidth = baseWidth;
+        filter->candidateHeight = baseHeight;
+        filter->sizeStableFor = 0.0f;
+      } else {
+        filter->sizeStableFor += seconds;
+        if (filter->sizeStableFor >= kSizeStableSeconds) {
+          filter->lastBaseWidth = baseWidth;
+          filter->lastBaseHeight = baseHeight;
+          start_measuring(filter, kMeasureGap, kMaxRetryRounds);
+        }
+      }
+    } else {
+      filter->candidateWidth = baseWidth;
+      filter->candidateHeight = baseHeight;
+      filter->sizeStableFor = 0.0f;
     }
-    if (filter->measuresLeft > 0) {
+
+    // Nao agenda stage enquanto um map ainda esta pendente (ping-pong).
+    if (filter->measuresLeft > 0 && !filter->queueMap && !filter->queueStage) {
       filter->sinceMeasure += seconds;
       if (filter->sinceMeasure >= filter->measureGap) {
         filter->sinceMeasure = 0.0f;
-        filter->needsDetect = true;
+        filter->queueStage = true;
       }
     }
   }
@@ -470,10 +563,7 @@ void filter_destroy(void *data)
   obs_enter_graphics();
   if (filter->effect)
     gs_effect_destroy(filter->effect);
-  if (filter->sampleSurface)
-    gs_stagesurface_destroy(filter->sampleSurface);
-  if (filter->sampleRender)
-    gs_texrender_destroy(filter->sampleRender);
+  release_sample_resources(filter);
   obs_leave_graphics();
   delete filter;
 }
@@ -491,7 +581,7 @@ void filter_defaults(obs_data_t *settings)
   obs_data_set_default_int(settings, kSettingCropRight, 0);
   obs_data_set_default_int(settings, kSettingCropTop, 0);
   obs_data_set_default_int(settings, kSettingCropBottom, 0);
-  obs_data_set_default_bool(settings, kSettingAutoCrop, true);
+  obs_data_set_default_bool(settings, kSettingAutoCrop, false);
   obs_data_set_default_int(settings, kSettingBlackLevel, 24);
 }
 
@@ -603,39 +693,30 @@ void filter_render(void *data, gs_effect_t *)
   }
 
   obs_source_t *target = obs_filter_get_target(filter->context);
-  if (filter->needsDetect && target) {
-    filter->needsDetect = false;
+
+  // Ping-pong: map do stage anterior ANTES de stage deste quadro.
+  if (filter->queueMap && target) {
+    filter->queueMap = false;
     const uint32_t baseWidth = obs_source_get_base_width(target);
     const uint32_t baseHeight = obs_source_get_base_height(target);
     int left = 0, right = 0, top = 0, bottom = 0;
     const bool measured =
         baseWidth && baseHeight &&
-        detect_black_borders(filter, target, baseWidth, baseHeight, &left,
-                             &right, &top, &bottom);
-    if (measured) {
-      // Fica com o menor recorte da rodada: melhor sobrar tarja do que comer
-      // um pedaco da imagem por causa de um quadro escuro.
-      if (filter->pendingCount == 0) {
-        filter->pendingLeft = left;
-        filter->pendingRight = right;
-        filter->pendingTop = top;
-        filter->pendingBottom = bottom;
-      } else {
-        filter->pendingLeft = std::min(filter->pendingLeft, left);
-        filter->pendingRight = std::min(filter->pendingRight, right);
-        filter->pendingTop = std::min(filter->pendingTop, top);
-        filter->pendingBottom = std::min(filter->pendingBottom, bottom);
-      }
-      ++filter->pendingCount;
-    }
+        map_border_sample(filter, baseWidth, baseHeight, &left, &right, &top,
+                          &bottom);
+    finish_measure_slot(filter, measured, left, right, top, bottom);
+  }
 
-    if (filter->measuresLeft > 0)
-      --filter->measuresLeft;
-    if (filter->measuresLeft == 0) {
-      if (filter->pendingCount > 0)
-        commit_measurement(filter);
-      else if (filter->roundsLeft > 0)
-        start_measuring(filter, kRetryGap, filter->roundsLeft - 1);
+  if (filter->queueStage && target) {
+    filter->queueStage = false;
+    const uint32_t baseWidth = obs_source_get_base_width(target);
+    const uint32_t baseHeight = obs_source_get_base_height(target);
+    if (baseWidth && baseHeight &&
+        stage_border_sample(filter, target, baseWidth, baseHeight)) {
+      // Leitura so no proximo quadro — evita stall sincrono na GPU.
+      filter->queueMap = true;
+    } else {
+      finish_measure_slot(filter, false, 0, 0, 0, 0);
     }
   }
 

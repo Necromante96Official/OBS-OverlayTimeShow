@@ -8,7 +8,7 @@ Requer Windows 10/11 e OBS Studio 28+ (plugin testado com ~31.1.1).
 
 | Modo | Quando usar | Como iniciar |
 |------|-------------|--------------|
-| **Plugin nativo** (recomendado) | Timer + Suites + cantos da câmera + filtro de cantos | `Setup-Build-Env.bat` uma vez, depois `Build-Install-Plugin.bat` |
+| **Plugin nativo** (recomendado) | Timer + Suites + filtro de cantos | `Setup-Build-Env.bat` uma vez, depois `Build-Install-Plugin.bat` |
 | **Overlay Python** | Só o timer, sem instalar plugin | `python-overlay\start.bat` (WebSocket do OBS ligado) |
 | **Browser dock** | Timer como dock interno do OBS | `Ferramentas → Docks do navegador personalizados` apontando para `browser-dock\timer.html` |
 
@@ -22,7 +22,7 @@ Use como **Custom Browser Dock**, não como Browser Source. Em Browser Source o 
 2. Rode `Build-Install-Plugin.bat` (fecha o OBS antes).
 3. O instalador procura OBS em `OBS_STUDIO_PATH`, Steam (`D:\SteamLibrary\...`) e Program Files.
 
-No OBS: dock **Suites**, atalhos para mover o timer / encerrar com outro / câmera.
+No OBS: dock **Suites**, atalhos para mover o timer / executar suíte / encerrar com outro.
 
 ## Overlay Python
 

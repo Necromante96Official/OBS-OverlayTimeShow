@@ -27,12 +27,23 @@ public:
   void cancel();
   bool isRunning() const { return m_running; }
 
+signals:
+  void started(const QString &suiteName);
+  void stepStarted(int stepIndex, const QString &summary);
+  void stepFailed(const QString &summary);
+  void finished();
+  void outroState(bool active);
+
 private:
   void runSuite(const Suite &suite, SuiteTrigger trigger,
                 bool openFolderWhenDone = false,
                 bool stopRecordingWhenDone = false);
   // Monta a fila incluindo o escurecer e o clarear pedidos pelos grupos.
   static QVector<SuiteStep> buildQueue(const Suite &suite);
+  // Slot da suite para o gatilho atual; vazio = modo legado (groupWhen).
+  static QString slotGroupIdForTrigger(const Suite &suite, SuiteTrigger trigger);
+  // Decide se o grupo entra nesta execucao.
+  bool groupAllowed(const SuiteStep &step) const;
   void advance();
   // Desliga o proximo bloco ou o grupo alvo quando a condicao nao passa.
   void applyConditionResult(const SuiteStep &step, bool passed);
@@ -47,6 +58,8 @@ private:
   bool m_running = false;
   bool m_skipNext = false;
   SuiteTrigger m_trigger = SuiteTrigger::Manual;
+  // Grupo fixo do slot da suite (vazio = filtrar por groupWhen).
+  QString m_slotGroupId;
   // Grupos desligados por uma condicao nesta execucao.
   QSet<QString> m_skippedGroups;
   // Grupo do passo anterior, para aplicar a transicao ao entrar em um novo.
@@ -59,4 +72,5 @@ private:
   // aparecer no arquivo antes de encerrar.
   int m_tailMs = 0;
   QElapsedTimer m_sinceStart;
+  QString m_suiteName;
 };

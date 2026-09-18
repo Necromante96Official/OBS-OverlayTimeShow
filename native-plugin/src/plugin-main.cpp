@@ -1,4 +1,3 @@
-#include "camera-position.hpp"
 #include "recording-timer-overlay.hpp"
 #include "rounded-corners-filter.hpp"
 #include "suite-dock.hpp"
@@ -14,7 +13,6 @@
 #include <util/config-file.h>
 #include <util/platform.h>
 
-#include <QCoreApplication>
 #include <QDockWidget>
 #include <QFile>
 #include <QHash>
@@ -46,8 +44,6 @@ obs_hotkey_id hotkey_left = OBS_INVALID_HOTKEY_ID;
 obs_hotkey_id hotkey_right = OBS_INVALID_HOTKEY_ID;
 obs_hotkey_id hotkey_run_suite = OBS_INVALID_HOTKEY_ID;
 obs_hotkey_id hotkey_stop_with_outro = OBS_INVALID_HOTKEY_ID;
-obs_hotkey_id hotkey_camera_next = OBS_INVALID_HOTKEY_ID;
-obs_hotkey_id hotkey_camera_prev = OBS_INVALID_HOTKEY_ID;
 
 constexpr const char *kHotkeyNameUp = "obs-overlay-time-show.move_up";
 constexpr const char *kHotkeyNameDown = "obs-overlay-time-show.move_down";
@@ -56,34 +52,7 @@ constexpr const char *kHotkeyNameRight = "obs-overlay-time-show.move_right";
 constexpr const char *kHotkeyNameRunSuite = "obs-overlay-time-show.run_active_suite";
 constexpr const char *kHotkeyNameStopWithOutro =
     "obs-overlay-time-show.stop_recording_with_outro";
-constexpr const char *kHotkeyNameCameraNext =
-    "obs-overlay-time-show.camera_next_corner";
-constexpr const char *kHotkeyNameCameraPrev =
-    "obs-overlay-time-show.camera_previous_corner";
 constexpr const char *kDockId = "OBSOverlayTimeShowSuites";
-
-// Atalhos que jogam a camera para um canto da tela.
-struct CameraHotkey {
-  CameraPosition::Anchor anchor;
-  const char *lookupKey;
-  obs_hotkey_id id;
-  QByteArray configName;
-};
-
-CameraHotkey camera_hotkeys[] = {
-    {CameraPosition::Anchor::TopLeft,
-     "OBSOverlayTimeShow.Hotkey.CameraTopLeft", OBS_INVALID_HOTKEY_ID, {}},
-    {CameraPosition::Anchor::TopCenter,
-     "OBSOverlayTimeShow.Hotkey.CameraTopCenter", OBS_INVALID_HOTKEY_ID, {}},
-    {CameraPosition::Anchor::TopRight,
-     "OBSOverlayTimeShow.Hotkey.CameraTopRight", OBS_INVALID_HOTKEY_ID, {}},
-    {CameraPosition::Anchor::BottomLeft,
-     "OBSOverlayTimeShow.Hotkey.CameraBottomLeft", OBS_INVALID_HOTKEY_ID, {}},
-    {CameraPosition::Anchor::BottomCenter,
-     "OBSOverlayTimeShow.Hotkey.CameraBottomCenter", OBS_INVALID_HOTKEY_ID, {}},
-    {CameraPosition::Anchor::BottomRight,
-     "OBSOverlayTimeShow.Hotkey.CameraBottomRight", OBS_INVALID_HOTKEY_ID, {}},
-};
 
 void sync_overlay_state();
 void register_suites_dock();
@@ -256,37 +225,6 @@ void hotkey_stop_recording_with_outro(void *, obs_hotkey_id, obs_hotkey_t *,
   if (!pressed)
     return;
   runOnEngine([](SuiteEngine *engine) { engine->stopRecordingWithOutro(); });
-}
-
-// O atalho chega em outra thread; mexer na cena fica para o loop da interface.
-void hotkey_camera_position(void *data, obs_hotkey_id, obs_hotkey_t *,
-                            bool pressed)
-{
-  if (!pressed || !data)
-    return;
-  const CameraPosition::Anchor anchor =
-      static_cast<CameraHotkey *>(data)->anchor;
-  QObject *context = QCoreApplication::instance();
-  if (!context) {
-    CameraPosition::apply(anchor);
-    return;
-  }
-  QTimer::singleShot(0, context, [anchor]() { CameraPosition::apply(anchor); });
-}
-
-// Um toque leva a camera para o proximo canto da rota, dando a volta na tela.
-void hotkey_camera_cycle(void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed)
-{
-  if (!pressed)
-    return;
-  const int direction = data ? 1 : -1;
-  QObject *context = QCoreApplication::instance();
-  if (!context) {
-    CameraPosition::cycle(direction);
-    return;
-  }
-  QTimer::singleShot(0, context,
-                     [direction]() { CameraPosition::cycle(direction); });
 }
 
 obs_hotkey_id register_one_hotkey(const char *id, const char *lookup_key,
@@ -540,10 +478,6 @@ void load_all_hotkey_bindings()
   load_hotkey_bindings(hotkey_right, kHotkeyNameRight);
   load_hotkey_bindings(hotkey_run_suite, kHotkeyNameRunSuite);
   load_hotkey_bindings(hotkey_stop_with_outro, kHotkeyNameStopWithOutro);
-  load_hotkey_bindings(hotkey_camera_next, kHotkeyNameCameraNext);
-  load_hotkey_bindings(hotkey_camera_prev, kHotkeyNameCameraPrev);
-  for (const CameraHotkey &entry : camera_hotkeys)
-    load_hotkey_bindings(entry.id, entry.configName.constData());
   for (auto it = suite_hotkeys.constBegin(); it != suite_hotkeys.constEnd();
        ++it) {
     load_hotkey_bindings(it.value(),
@@ -559,10 +493,6 @@ void save_all_hotkey_bindings()
   save_hotkey_bindings(hotkey_right, kHotkeyNameRight);
   save_hotkey_bindings(hotkey_run_suite, kHotkeyNameRunSuite);
   save_hotkey_bindings(hotkey_stop_with_outro, kHotkeyNameStopWithOutro);
-  save_hotkey_bindings(hotkey_camera_next, kHotkeyNameCameraNext);
-  save_hotkey_bindings(hotkey_camera_prev, kHotkeyNameCameraPrev);
-  for (const CameraHotkey &entry : camera_hotkeys)
-    save_hotkey_bindings(entry.id, entry.configName.constData());
   for (auto it = suite_hotkeys.constBegin(); it != suite_hotkeys.constEnd();
        ++it) {
     save_hotkey_bindings(it.value(),
@@ -633,30 +563,6 @@ void register_hotkeys()
       kHotkeyNameStopWithOutro,
       "OBSOverlayTimeShow.Hotkey.StopRecordingWithOutro",
       hotkey_stop_recording_with_outro);
-
-  // O ponteiro em "data" diz o sentido: preenchido segue a rota, nulo volta.
-  hotkey_camera_next = obs_hotkey_register_frontend(
-      kHotkeyNameCameraNext,
-      obs_module_text("OBSOverlayTimeShow.Hotkey.CameraNextCorner"),
-      hotkey_camera_cycle, reinterpret_cast<void *>(1));
-  hotkey_camera_prev = obs_hotkey_register_frontend(
-      kHotkeyNameCameraPrev,
-      obs_module_text("OBSOverlayTimeShow.Hotkey.CameraPreviousCorner"),
-      hotkey_camera_cycle, nullptr);
-
-  for (CameraHotkey &entry : camera_hotkeys) {
-    entry.configName =
-        QByteArray("obs-overlay-time-show.") +
-        CameraPosition::anchorConfigName(entry.anchor).toUtf8();
-    entry.id = obs_hotkey_register_frontend(
-        entry.configName.constData(), obs_module_text(entry.lookupKey),
-        hotkey_camera_position, &entry);
-    if (entry.id == OBS_INVALID_HOTKEY_ID) {
-      blog(LOG_WARNING,
-           "[obs-overlay-time-show] falha ao registrar atalho de posicao: %s",
-           entry.configName.constData());
-    }
-  }
 }
 
 void unregister_hotkeys()
@@ -673,10 +579,6 @@ void unregister_hotkeys()
   clear(hotkey_right);
   clear(hotkey_run_suite);
   clear(hotkey_stop_with_outro);
-  clear(hotkey_camera_next);
-  clear(hotkey_camera_prev);
-  for (CameraHotkey &entry : camera_hotkeys)
-    clear(entry.id);
 
   const QList<QString> suiteIds = suite_hotkeys.keys();
   for (const QString &suiteId : suiteIds)
@@ -697,7 +599,6 @@ void on_frontend_event(enum obs_frontend_event event, void *)
   case OBS_FRONTEND_EVENT_PROFILE_CHANGED:
   case OBS_FRONTEND_EVENT_PROFILE_LIST_CHANGED:
     load_all_hotkey_bindings();
-    CameraPosition::reload();
     break;
   case OBS_FRONTEND_EVENT_EXIT:
     save_all_hotkey_bindings();

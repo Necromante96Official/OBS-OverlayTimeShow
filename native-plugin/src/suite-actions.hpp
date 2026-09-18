@@ -9,7 +9,11 @@
 namespace SuiteActions {
 
 QStringList sceneNames();
+// Fontes da cena, incluindo as que estao dentro de grupos.
 QStringList sourceNamesInScene(const QString &sceneName);
+// Igual a sourceNamesInScene, mas com rotulo para a UI:
+//   first = texto exibido ("Grupo › Fonte"), second = nome real da fonte.
+QVector<QPair<QString, QString>> sourceEntriesInScene(const QString &sceneName);
 QStringList transitionNames();
 QStringList audioSourceNames();
 

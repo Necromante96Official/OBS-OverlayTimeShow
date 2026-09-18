@@ -33,6 +33,30 @@ void remapStepGroupIds(QVector<SuiteStep> &steps)
   }
 }
 
+// Remapeia ids de grupo nos passos e nos slots da suite (inicio/fim/atalho).
+void remapSuiteGroupIds(Suite &suite)
+{
+  QHash<QString, QString> groupMap;
+  auto mapId = [&groupMap](const QString &id) -> QString {
+    if (id.isEmpty())
+      return id;
+    auto it = groupMap.find(id);
+    if (it != groupMap.end())
+      return it.value();
+    const QString fresh = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    groupMap.insert(id, fresh);
+    return fresh;
+  };
+
+  for (SuiteStep &step : suite.steps) {
+    step.groupId = mapId(step.groupId);
+    step.conditionGroupId = mapId(step.conditionGroupId);
+  }
+  suite.groupOnStartId = mapId(suite.groupOnStartId);
+  suite.groupOnStopId = mapId(suite.groupOnStopId);
+  suite.groupOnHotkeyId = mapId(suite.groupOnHotkeyId);
+}
+
 } // namespace
 
 SuiteStore::SuiteStore(QObject *parent) : QObject(parent) {}
@@ -180,7 +204,7 @@ Suite SuiteStore::duplicateSuite(const QString &id)
   Suite copy = *src;
   copy.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
   copy.name = src->name + QStringLiteral(" (cópia)");
-  remapStepGroupIds(copy.steps);
+  remapSuiteGroupIds(copy);
   m_suites.append(copy);
   save();
   emit changed();
@@ -230,7 +254,11 @@ Suite SuiteStore::mergeSuites(const QStringList &ids, const QString &name,
   merged.runOnRecordingStart = onStart;
   merged.runOnRecordingStop = onStop;
   merged.steps = steps;
-  remapStepGroupIds(merged.steps);
+  remapSuiteGroupIds(merged);
+  // Mescla nao herda slots: o usuario escolhe de novo na suite nova.
+  merged.groupOnStartId.clear();
+  merged.groupOnStopId.clear();
+  merged.groupOnHotkeyId.clear();
   m_suites.append(merged);
 
   if (removeOriginals) {
